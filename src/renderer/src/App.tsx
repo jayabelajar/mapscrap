@@ -1,4 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  LayoutDashboard,
+  Play,
+  Pause,
+  Square,
+  History as HistoryIcon,
+  Settings as SettingsIcon,
+  Search,
+  Download,
+  Trash2,
+  Sparkles,
+  MapPin,
+  ExternalLink,
+  FolderOpen,
+  ArrowUpDown,
+  Building2,
+  Star,
+  Phone,
+  Globe,
+  Database,
+  CheckCircle2,
+  RefreshCw,
+  Table as TableIcon
+} from 'lucide-react'
+
 import type {
   BusinessRecord,
   DashboardSnapshot,
@@ -6,6 +31,29 @@ import type {
   ScrapeRunRecord,
   SettingsData
 } from '../../shared/types'
+
+import {
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  Input,
+  Progress,
+  Select,
+  Switch,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  ToastContainer,
+  type ToastState
+} from './components/ui'
 
 type ViewKey = 'dashboard' | 'scrape' | 'results' | 'history' | 'settings'
 type SortKey = 'name' | 'category' | 'rating' | 'reviewCount'
@@ -19,12 +67,12 @@ const defaultSettings: SettingsData = {
   exportDirectory: ''
 }
 
-const navItems: Array<{ key: ViewKey; label: string }> = [
-  { key: 'dashboard', label: 'Dashboard' },
-  { key: 'scrape', label: 'New Scrape' },
-  { key: 'results', label: 'Results' },
-  { key: 'history', label: 'History' },
-  { key: 'settings', label: 'Settings' }
+const navItems: Array<{ key: ViewKey; label: string; icon: React.ReactNode }> = [
+  { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="icon-md" /> },
+  { key: 'scrape', label: 'Scrape Baru', icon: <Play className="icon-md" /> },
+  { key: 'results', label: 'Hasil Data', icon: <TableIcon className="icon-md" /> },
+  { key: 'history', label: 'Riwayat', icon: <HistoryIcon className="icon-md" /> },
+  { key: 'settings', label: 'Pengaturan', icon: <SettingsIcon className="icon-md" /> }
 ]
 
 function App(): React.JSX.Element {
@@ -37,13 +85,26 @@ function App(): React.JSX.Element {
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
+  const [hasPhoneOnly, setHasPhoneOnly] = useState(false)
   const [settings, setSettings] = useState<SettingsData>(defaultSettings)
-  const [form, setForm] = useState({ keyword: 'Coffee Shop', location: 'Surabaya', maxResults: 50 })
+  const [form, setForm] = useState({ keyword: 'Cafe', location: 'Surabaya', maxResults: 20 })
   const [detail, setDetail] = useState<BusinessRecord | null>(null)
   const [progress, setProgress] = useState<DashboardSnapshot['progress']>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isBusy, setIsBusy] = useState(false)
-  const [message, setMessage] = useState('Ready')
+  const [statusMessage, setStatusMessage] = useState('Siap')
+  const [toasts, setToasts] = useState<ToastState[]>([])
+
+  const addToast = useCallback(
+    (title: string, description?: string, type: ToastState['type'] = 'info') => {
+      const id = String(Date.now() + Math.random())
+      setToasts((current) => [...current, { id, title, description, type }])
+      setTimeout(() => {
+        setToasts((current) => current.filter((t) => t.id !== id))
+      }, 4500)
+    },
+    []
+  )
 
   const applySnapshot = useCallback((snapshot: DashboardSnapshot): void => {
     setRuns(snapshot.runs)
@@ -52,23 +113,21 @@ function App(): React.JSX.Element {
     setProgress(snapshot.progress)
     setResults(snapshot.results)
     setSelectedRunId((current) => current || snapshot.activeRun?.id || snapshot.runs[0]?.id || '')
-    setMessage(snapshot.progress?.message ?? 'Ready')
+    setStatusMessage(snapshot.progress?.message ?? 'Siap')
   }, [])
 
   useEffect(() => {
     let cancelled = false
 
     void window.api.getSnapshot().then((snapshot) => {
-      if (cancelled) {
-        return
-      }
+      if (cancelled) return
       applySnapshot(snapshot)
       setIsLoading(false)
     })
 
     const offProgress = window.api.onProgress((payload) => {
       setProgress(payload)
-      setMessage(payload.message)
+      setStatusMessage(payload.message)
       setRuns((current) =>
         current.map((run) =>
           run.id === payload.runId
@@ -113,9 +172,7 @@ function App(): React.JSX.Element {
   }, [applySnapshot])
 
   useEffect(() => {
-    if (!selectedRunId) {
-      return
-    }
+    if (!selectedRunId) return
 
     let cancelled = false
     void window.api.listResults({ runId: selectedRunId }).then((items) => {
@@ -136,43 +193,52 @@ function App(): React.JSX.Element {
 
   const filteredResults = useMemo(() => {
     const text = search.trim().toLowerCase()
-    const next = results.filter((item) => {
-      if (!text) {
-        return true
-      }
+    const list = results.filter((item) => {
+      if (hasPhoneOnly && !item.phone) return false
+      if (!text) return true
 
-      return [item.name, item.category, item.address, item.phone, item.website].some((value) =>
-        value.toLowerCase().includes(text)
+      return [item.name, item.category, item.address, item.phone, item.website].some((val) =>
+        val.toLowerCase().includes(text)
       )
     })
 
-    next.sort((left, right) => {
-      const leftValue = left[sortKey] ?? ''
-      const rightValue = right[sortKey] ?? ''
-      const comparison =
-        typeof leftValue === 'number' && typeof rightValue === 'number'
-          ? leftValue - rightValue
-          : String(leftValue).localeCompare(String(rightValue))
+    list.sort((a, b) => {
+      let left = a[sortKey]
+      let right = b[sortKey]
 
-      return sortDirection === 'asc' ? comparison : -comparison
+      if (sortKey === 'rating' || sortKey === 'reviewCount') {
+        const numA = left !== null && left !== undefined ? Number(left) : -1
+        const numB = right !== null && right !== undefined ? Number(right) : -1
+        return sortDirection === 'asc' ? numA - numB : numB - numA
+      }
+
+      const strA = String(left ?? '').toLowerCase()
+      const strB = String(right ?? '').toLowerCase()
+      const comp = strA.localeCompare(strB)
+      return sortDirection === 'asc' ? comp : -comp
     })
 
-    return next
-  }, [results, search, sortDirection, sortKey])
+    return list
+  }, [results, search, hasPhoneOnly, sortKey, sortDirection])
 
   const stats = useMemo(() => {
-    const rated = results.filter((item) => item.rating !== null)
-    const averageRating =
-      rated.reduce((sum, item) => sum + Number(item.rating), 0) / Math.max(1, rated.length)
+    const rated = results.filter((r) => r.rating !== null)
+    const avgRating =
+      rated.reduce((acc, curr) => acc + Number(curr.rating), 0) / Math.max(1, rated.length)
 
     return {
-      completed: runs.filter((item) => item.status === 'completed').length,
-      totalBusinesses: runs.reduce((sum, item) => sum + item.totalResults, 0),
-      averageRating
+      totalRuns: runs.length,
+      completed: runs.filter((r) => r.status === 'completed').length,
+      totalBusinesses: runs.reduce((acc, r) => acc + r.totalResults, 0),
+      avgRating
     }
   }, [results, runs])
 
-  const runAction = async (task: () => Promise<unknown>, successMessage: string): Promise<void> => {
+  const runAction = async (
+    task: () => Promise<unknown>,
+    successTitle: string,
+    successDesc?: string
+  ): Promise<void> => {
     setIsBusy(true)
     try {
       await task()
@@ -183,9 +249,11 @@ function App(): React.JSX.Element {
         const items = await window.api.listResults({ runId: nextRunId })
         setResults(items)
       }
-      setMessage(successMessage)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Operation failed')
+      addToast(successTitle, successDesc, 'success')
+    } catch (err) {
+      const errText = err instanceof Error ? err.message : 'Operasi gagal'
+      setStatusMessage(errText)
+      addToast('Gagal', errText, 'error')
     } finally {
       setIsBusy(false)
     }
@@ -197,27 +265,36 @@ function App(): React.JSX.Element {
       setSelectedRunId(run.id)
       setSelectedIds([])
       setView('results')
-    }, 'Scrape started')
+    }, 'Scrape Dimulai', `Mencari '${form.keyword}' di ${form.location}`)
   }
 
   const handleExport = async (format: 'csv' | 'xlsx'): Promise<void> => {
-    if (!selectedRunId) {
-      return
-    }
+    if (!selectedRunId) return
 
     await runAction(async () => {
-      await window.api.exportResults({
+      const exportedPath = await window.api.exportResults({
         runId: selectedRunId,
         ids: selectedIds.length > 0 ? selectedIds : undefined,
         format
       })
-    }, `Export ${format.toUpperCase()} completed`)
+      addToast(
+        `Ekspor ${format.toUpperCase()} Berhasil`,
+        `File tersimpan di: ${exportedPath}`,
+        'success'
+      )
+    }, `Ekspor ${format.toUpperCase()} Selesai`)
   }
 
   const toggleSelection = (id: string): void => {
-    setSelectedIds((current) =>
-      current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
-    )
+    setSelectedIds((curr) => (curr.includes(id) ? curr.filter((i) => i !== id) : [...curr, id]))
+  }
+
+  const toggleSelectAll = (): void => {
+    if (selectedIds.length === filteredResults.length) {
+      setSelectedIds([])
+    } else {
+      setSelectedIds(filteredResults.map((r) => r.id))
+    }
   }
 
   const activeStatus: RunStatus = activeRun?.status ?? progress?.status ?? 'idle'
@@ -225,541 +302,860 @@ function App(): React.JSX.Element {
     ? Math.min(100, Math.round((progress.current / Math.max(1, progress.total)) * 100))
     : 0
 
+  const getBadgeVariant = (status: RunStatus) => {
+    switch (status) {
+      case 'completed':
+        return 'success'
+      case 'running':
+        return 'info'
+      case 'paused':
+        return 'warning'
+      case 'failed':
+      case 'stopped':
+        return 'destructive'
+      default:
+        return 'outline'
+    }
+  }
+
   return (
     <div className="app-shell">
+      {/* SIDEBAR */}
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-mark">MS</span>
-          <div>
+          <div className="brand-icon">
+            <Building2 className="icon-lg" />
+          </div>
+          <div className="brand-info">
             <h1>MapScraper</h1>
-            <p>Google Maps lead extractor</p>
+            <p>Google Maps Lead Scraper</p>
           </div>
         </div>
-        <nav className="nav-list">
+
+        <nav className="sidebar-nav">
           {navItems.map((item) => (
             <button
               key={item.key}
-              className={view === item.key ? 'nav-item active' : 'nav-item'}
+              className={`sidebar-link ${view === item.key ? 'active' : ''}`}
               onClick={() => setView(item.key)}
             >
-              {item.label}
+              <div className="sidebar-link-inner">
+                {item.icon}
+                <span>{item.label}</span>
+              </div>
+              {item.key === 'results' && results.length > 0 && (
+                <Badge variant="secondary">{results.length}</Badge>
+              )}
             </button>
           ))}
         </nav>
-        <div className="status-card">
-          <div className={`status-dot ${activeStatus}`}></div>
-          <div>
-            <strong>{activeStatus.toUpperCase()}</strong>
-            <p>{message}</p>
+
+        <div className="sidebar-status-card">
+          <div className={`status-dot-indicator ${activeStatus}`} />
+          <div className="status-info">
+            <span className="status-label">{activeStatus}</span>
+            <p className="status-text">{statusMessage}</p>
           </div>
         </div>
       </aside>
 
-      <main className="main-panel">
-        <header className="hero">
-          <div>
-            <span className="eyebrow">MVP v1</span>
-            <h2>Google Maps Business Scraper</h2>
-            <p>
-              Scrape single keyword by location, store history in SQLite, and export clean business
-              data.
-            </p>
+      {/* MAIN CONTENT AREA */}
+      <main className="main-area">
+        {/* HEADER NAVBAR */}
+        <header className="top-header">
+          <div className="header-title-group">
+            <h2 className="header-page-title">
+              {navItems.find((i) => i.key === view)?.label}
+            </h2>
+            {selectedRun && (
+              <Badge variant="outline">
+                {selectedRun.keyword} • {selectedRun.location}
+              </Badge>
+            )}
           </div>
-          <div className="hero-actions">
-            <button className="ghost-button" onClick={() => void window.api.openExportDirectory()}>
-              Open Export Folder
-            </button>
-            <button className="primary-button" onClick={() => setView('scrape')}>
-              New Scrape
-            </button>
+
+          <div className="header-actions">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                void window.api.openExportDirectory().then(() => {
+                  addToast('Membuka Folder', 'Folder ekspor telah dibuka', 'info')
+                })
+              }
+            >
+              <FolderOpen className="icon-sm" />
+              Folder Ekspor
+            </Button>
+
+            <Button variant="default" size="sm" onClick={() => setView('scrape')}>
+              <Play className="icon-sm" />
+              Scrape Baru
+            </Button>
           </div>
         </header>
 
-        {isLoading ? (
-          <section className="panel">
-            <p>Loading application state...</p>
-          </section>
-        ) : (
-          <>
-            {view === 'dashboard' && (
-              <section className="panel-grid">
-                <article className="metric-card">
-                  <span>Total Runs</span>
-                  <strong>{runs.length}</strong>
-                </article>
-                <article className="metric-card">
-                  <span>Completed Runs</span>
-                  <strong>{stats.completed}</strong>
-                </article>
-                <article className="metric-card">
-                  <span>Total Businesses</span>
-                  <strong>{stats.totalBusinesses}</strong>
-                </article>
-                <article className="metric-card">
-                  <span>Avg Rating</span>
-                  <strong>
-                    {Number.isFinite(stats.averageRating) ? stats.averageRating.toFixed(1) : '0.0'}
-                  </strong>
-                </article>
-
-                <article className="panel wide">
-                  <div className="panel-head">
-                    <h3>Active Progress</h3>
-                    <span>
-                      {progress ? `${progress.current}/${progress.total}` : 'No active scrape'}
-                    </span>
-                  </div>
-                  <div className="progress-track">
-                    <div className="progress-bar" style={{ width: `${progressPercent}%` }}></div>
-                  </div>
-                  <p className="muted">
-                    {progress?.message ?? 'Start a new scrape to begin collecting data.'}
-                  </p>
-                </article>
-
-                <article className="panel wide">
-                  <div className="panel-head">
-                    <h3>Recent History</h3>
-                    <button className="text-button" onClick={() => setView('history')}>
-                      View all
-                    </button>
-                  </div>
-                  <div className="history-stack">
-                    {runs.slice(0, 5).map((run) => (
-                      <button
-                        key={run.id}
-                        className="history-item"
-                        onClick={() => {
-                          setSelectedRunId(run.id)
-                          setView('results')
-                        }}
-                      >
-                        <div>
-                          <strong>{run.keyword}</strong>
-                          <p>
-                            {run.location} | {run.totalResults} results
-                          </p>
+        {/* CONTENT BODY */}
+        <div className="content-body">
+          {isLoading ? (
+            <Card>
+              <CardContent style={{ padding: '30px', textAlign: 'center', color: '#94a3b8' }}>
+                <RefreshCw className="icon-lg ui-spinner" style={{ margin: '0 auto 8px auto' }} />
+                <p>Memuat status aplikasi...</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              {/* DASHBOARD VIEW */}
+              {view === 'dashboard' && (
+                <>
+                  <div className="metrics-grid">
+                    <Card>
+                      <CardContent className="metric-card-box">
+                        <div className="metric-card-top">
+                          <span className="metric-card-title">Total Run</span>
+                          <Database className="icon-md" style={{ color: '#60a5fa' }} />
                         </div>
-                        <span className={`badge ${run.status}`}>{run.status}</span>
-                      </button>
-                    ))}
-                  </div>
-                </article>
-              </section>
-            )}
+                        <div className="metric-card-value">{stats.totalRuns}</div>
+                        <span className="metric-card-sub">Total sesi scraping yang dibuat</span>
+                      </CardContent>
+                    </Card>
 
-            {view === 'scrape' && (
-              <section className="panel split">
-                <div>
-                  <div className="panel-head">
-                    <h3>New Scrape</h3>
-                    <span>Single keyword, single location</span>
-                  </div>
-                  <label className="field">
-                    <span>Keyword</span>
-                    <input
-                      value={form.keyword}
-                      onChange={(event) =>
-                        setForm((current) => ({ ...current, keyword: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Location</span>
-                    <input
-                      value={form.location}
-                      onChange={(event) =>
-                        setForm((current) => ({ ...current, location: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Max Results</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={500}
-                      value={form.maxResults}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          maxResults: Number(event.target.value) || 1
-                        }))
-                      }
-                    />
-                  </label>
-                  <div className="button-row">
-                    <button
-                      className="primary-button"
-                      disabled={isBusy}
-                      onClick={() => void startScrape()}
-                    >
-                      Start Scraping
-                    </button>
-                    <button
-                      className="ghost-button"
-                      disabled={activeStatus !== 'running'}
-                      onClick={() =>
-                        void runAction(() => window.api.pauseScrape(), 'Scrape paused')
-                      }
-                    >
-                      Pause
-                    </button>
-                    <button
-                      className="ghost-button"
-                      disabled={activeStatus !== 'paused'}
-                      onClick={() =>
-                        void runAction(() => window.api.resumeScrape(), 'Scrape resumed')
-                      }
-                    >
-                      Resume
-                    </button>
-                    <button
-                      className="danger-button"
-                      disabled={!['running', 'paused'].includes(activeStatus)}
-                      onClick={() =>
-                        void runAction(() => window.api.stopScrape(), 'Scrape stopped')
-                      }
-                    >
-                      Stop
-                    </button>
-                  </div>
-                </div>
+                    <Card>
+                      <CardContent className="metric-card-box">
+                        <div className="metric-card-top">
+                          <span className="metric-card-title">Selesai</span>
+                          <CheckCircle2 className="icon-md" style={{ color: '#34d399' }} />
+                        </div>
+                        <div className="metric-card-value">{stats.completed}</div>
+                        <span className="metric-card-sub">Sesi scraping sukses</span>
+                      </CardContent>
+                    </Card>
 
-                <div className="panel accent-panel">
-                  <div className="panel-head">
-                    <h3>Progress</h3>
-                    <span>{progress ? `${progress.current}/${progress.total}` : '0/0'}</span>
-                  </div>
-                  <div className="progress-track large">
-                    <div className="progress-bar" style={{ width: `${progressPercent}%` }}></div>
-                  </div>
-                  <strong className="progress-value">{progressPercent}%</strong>
-                  <p className="muted">
-                    {progress?.message ?? 'Chromium will open when scraping starts.'}
-                  </p>
-                </div>
-              </section>
-            )}
+                    <Card>
+                      <CardContent className="metric-card-box">
+                        <div className="metric-card-top">
+                          <span className="metric-card-title">Total Bisnis</span>
+                          <Building2 className="icon-md" style={{ color: '#818cf8' }} />
+                        </div>
+                        <div className="metric-card-value">{stats.totalBusinesses}</div>
+                        <span className="metric-card-sub">Data kontak usaha terkumpul</span>
+                      </CardContent>
+                    </Card>
 
-            {view === 'results' && (
-              <section className="panel">
-                <div className="panel-head wrap">
-                  <div>
-                    <h3>Results</h3>
-                    <span>
-                      {selectedRun
-                        ? `${selectedRun.keyword} | ${selectedRun.location}`
-                        : 'Choose a run'}
-                    </span>
-                  </div>
-                  <div className="toolbar">
-                    <select
-                      value={selectedRunId}
-                      onChange={(event) => setSelectedRunId(event.target.value)}
-                    >
-                      {runs.map((run) => (
-                        <option key={run.id} value={run.id}>
-                          {run.keyword} - {run.location}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      placeholder="Search results"
-                      value={search}
-                      onChange={(event) => setSearch(event.target.value)}
-                    />
-                    <select
-                      value={sortKey}
-                      onChange={(event) => setSortKey(event.target.value as SortKey)}
-                    >
-                      <option value="name">Sort: Name</option>
-                      <option value="category">Sort: Category</option>
-                      <option value="rating">Sort: Rating</option>
-                      <option value="reviewCount">Sort: Reviews</option>
-                    </select>
-                    <button
-                      className="ghost-button"
-                      onClick={() =>
-                        setSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'))
-                      }
-                    >
-                      {sortDirection === 'asc' ? 'Ascending' : 'Descending'}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="button-row compact">
-                  <button className="ghost-button" onClick={() => void handleExport('csv')}>
-                    Export CSV
-                  </button>
-                  <button className="ghost-button" onClick={() => void handleExport('xlsx')}>
-                    Export XLSX
-                  </button>
-                  <button
-                    className="ghost-button"
-                    disabled={!selectedRunId}
-                    onClick={() =>
-                      void runAction(
-                        () => window.api.deduplicateRun(selectedRunId),
-                        'Deduplication completed'
-                      )
-                    }
-                  >
-                    Deduplicate
-                  </button>
-                  <button
-                    className="danger-button"
-                    disabled={selectedIds.length === 0}
-                    onClick={() =>
-                      void runAction(
-                        () => window.api.deleteResults(selectedIds),
-                        'Selected rows deleted'
-                      )
-                    }
-                  >
-                    Delete Selected
-                  </button>
-                </div>
-
-                <div className="results-layout">
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th></th>
-                          <th>Business</th>
-                          <th>Category</th>
-                          <th>Rating</th>
-                          <th>Phone</th>
-                          <th>Website</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredResults.map((item) => (
-                          <tr key={item.id} className={detail?.id === item.id ? 'active-row' : ''}>
-                            <td>
-                              <input
-                                type="checkbox"
-                                checked={selectedIds.includes(item.id)}
-                                onChange={() => toggleSelection(item.id)}
-                              />
-                            </td>
-                            <td>
-                              <button className="table-link" onClick={() => setDetail(item)}>
-                                {item.name}
-                              </button>
-                            </td>
-                            <td>{item.category || '-'}</td>
-                            <td>{item.rating ?? '-'}</td>
-                            <td>{item.phone || '-'}</td>
-                            <td>{item.website ? 'Available' : '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <Card>
+                      <CardContent className="metric-card-box">
+                        <div className="metric-card-top">
+                          <span className="metric-card-title">Rata-rata Rating</span>
+                          <Star className="icon-md" style={{ color: '#fbbf24' }} />
+                        </div>
+                        <div className="metric-card-value">
+                          {Number.isFinite(stats.avgRating) ? stats.avgRating.toFixed(1) : '0.0'}
+                        </div>
+                        <span className="metric-card-sub">Bintang ulasan tempat</span>
+                      </CardContent>
+                    </Card>
                   </div>
 
-                  <aside className="detail-card">
-                    <div className="panel-head">
-                      <h3>Business Detail</h3>
-                    </div>
-                    {detail ? (
-                      <div className="detail-stack">
-                        <strong>{detail.name}</strong>
-                        <p>{detail.category || 'No category'}</p>
-                        <p>{detail.address || 'No address'}</p>
-                        <p>{detail.phone || 'No phone'}</p>
-                        <p>{detail.website || 'No website'}</p>
-                        <p>
-                          Rating: {detail.rating ?? '-'} | Reviews: {detail.reviewCount ?? '-'}
-                        </p>
-                        <p>
-                          Lat/Lng: {detail.latitude ?? '-'}, {detail.longitude ?? '-'}
-                        </p>
-                        <a href={detail.mapsUrl} target="_blank" rel="noreferrer">
-                          Open Google Maps
-                        </a>
+                  {/* ACTIVE PROGRESS CARD */}
+                  <Card>
+                    <CardHeader>
+                      <div className="flex-between">
+                        <div>
+                          <CardTitle>Status Scraping Aktif</CardTitle>
+                          <CardDescription>
+                            {progress
+                              ? `${progress.current} dari ${progress.total} tempat dikumpulkan`
+                              : 'Tidak ada proses scraping aktif saat ini'}
+                          </CardDescription>
+                        </div>
+                        <Badge variant={getBadgeVariant(activeStatus)}>{activeStatus.toUpperCase()}</Badge>
                       </div>
-                    ) : (
-                      <p className="muted">Choose one row to inspect the business details.</p>
-                    )}
-                  </aside>
-                </div>
-              </section>
-            )}
+                    </CardHeader>
+                    <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <Progress value={progressPercent} />
+                      <div className="flex-between" style={{ fontSize: '12px', color: '#94a3b8' }}>
+                        <span>{progress?.message ?? 'Tekan "Scrape Baru" untuk memulai.'}</span>
+                        <span style={{ fontWeight: 600, color: '#f8fafc' }}>{progressPercent}%</span>
+                      </div>
+                    </CardContent>
+                  </Card>
 
-            {view === 'history' && (
-              <section className="panel">
-                <div className="panel-head">
-                  <h3>History</h3>
-                  <div className="button-row compact">
-                    <button
-                      className="danger-button"
-                      onClick={() =>
-                        void runAction(() => window.api.clearHistory(), 'History cleared')
-                      }
-                    >
-                      Clear History
-                    </button>
-                  </div>
+                  {/* RECENT HISTORY CARD */}
+                  <Card>
+                    <CardHeader>
+                      <div className="flex-between">
+                        <div>
+                          <CardTitle>Riwayat Terbaru</CardTitle>
+                          <CardDescription>Sesi pencarian yang telah dijalankan sebelumnya</CardDescription>
+                        </div>
+                        <Button variant="ghost" size="sm" onClick={() => setView('history')}>
+                          Lihat Semua
+                        </Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      {runs.length === 0 ? (
+                        <p style={{ fontSize: '13px', color: '#94a3b8' }}>Belum ada riwayat pencarian.</p>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {runs.slice(0, 5).map((run) => (
+                            <div
+                              key={run.id}
+                              className="history-card-item"
+                              style={{ cursor: 'pointer' }}
+                              onClick={() => {
+                                setSelectedRunId(run.id)
+                                setView('results')
+                              }}
+                            >
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                <div className="flex-gap-2">
+                                  <span style={{ fontWeight: 600, fontSize: '13px', color: '#f8fafc' }}>
+                                    {run.keyword}
+                                  </span>
+                                  <Badge variant="outline">{run.location}</Badge>
+                                </div>
+                                <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                                  {new Date(run.createdAt).toLocaleString('id-ID')} • {run.totalResults} hasil
+                                </span>
+                              </div>
+                              <Badge variant={getBadgeVariant(run.status)}>{run.status}</Badge>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </>
+              )}
+
+              {/* SCRAPE FORM VIEW */}
+              {view === 'scrape' && (
+                <div className="grid-2col">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Form Scraping Baru</CardTitle>
+                      <CardDescription>
+                        Masukkan kata kunci dan lokasi target untuk mengambil data tempat dari Google Maps.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <div className="form-field">
+                        <label className="form-label">Kata Kunci / Keyword</label>
+                        <Input
+                          icon={<Search className="icon-sm" />}
+                          placeholder="Contoh: Coffee Shop, Restoran, Bengkel"
+                          value={form.keyword}
+                          onChange={(e) => setForm((c) => ({ ...c, keyword: e.target.value }))}
+                        />
+                      </div>
+
+                      <div className="form-field">
+                        <label className="form-label">Lokasi / Kota Target</label>
+                        <Input
+                          icon={<MapPin className="icon-sm" />}
+                          placeholder="Contoh: Surabaya, Jakarta Selatan, Bandung"
+                          value={form.location}
+                          onChange={(e) => setForm((c) => ({ ...c, location: e.target.value }))}
+                        />
+                      </div>
+
+                      <div className="form-field">
+                        <label className="form-label">Maksimal Hasil Data</label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={500}
+                          value={form.maxResults}
+                          onChange={(e) =>
+                            setForm((c) => ({
+                              ...c,
+                              maxResults: Math.max(1, Math.min(500, Number(e.target.value) || 1))
+                            }))
+                          }
+                        />
+                      </div>
+                    </CardContent>
+                    <CardFooter style={{ justifyContent: 'flex-start' }}>
+                      <Button
+                        variant="default"
+                        disabled={isBusy || activeStatus === 'running'}
+                        onClick={() => void startScrape()}
+                      >
+                        <Play className="icon-sm" />
+                        Mulai Scrape
+                      </Button>
+
+                      <Button
+                        variant="outline"
+                        disabled={activeStatus !== 'running'}
+                        onClick={() =>
+                          void runAction(() => window.api.pauseScrape(), 'Scrape Didepause')
+                        }
+                      >
+                        <Pause className="icon-sm" />
+                        Pause
+                      </Button>
+
+                      <Button
+                        variant="outline"
+                        disabled={activeStatus !== 'paused'}
+                        onClick={() =>
+                          void runAction(() => window.api.resumeScrape(), 'Scrape Dilanjutkan')
+                        }
+                      >
+                        <Play className="icon-sm" />
+                        Lanjutkan
+                      </Button>
+
+                      <Button
+                        variant="destructive"
+                        disabled={!['running', 'paused'].includes(activeStatus)}
+                        onClick={() =>
+                          void runAction(() => window.api.stopScrape(), 'Scrape Dihentikan')
+                        }
+                      >
+                        <Square className="icon-sm" />
+                        Stop
+                      </Button>
+                    </CardFooter>
+                  </Card>
+
+                  {/* LIVE SCRAPE PROGRESS SIDEBAR */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Live Monitoring</CardTitle>
+                      <CardDescription>Progres saat ini</CardDescription>
+                    </CardHeader>
+                    <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <div className="flex-between" style={{ fontSize: '13px' }}>
+                        <span style={{ color: '#94a3b8' }}>Status</span>
+                        <Badge variant={getBadgeVariant(activeStatus)}>{activeStatus.toUpperCase()}</Badge>
+                      </div>
+
+                      <div className="flex-between" style={{ fontSize: '13px' }}>
+                        <span style={{ color: '#94a3b8' }}>Terkumpul</span>
+                        <span style={{ fontWeight: 700, color: '#f8fafc' }}>
+                          {progress ? `${progress.current} / ${progress.total}` : '0 / 0'}
+                        </span>
+                      </div>
+
+                      <Progress value={progressPercent} />
+
+                      <div style={{ textAlign: 'center', paddingTop: '8px' }}>
+                        <span style={{ fontSize: '28px', fontWeight: 800, color: '#60a5fa' }}>{progressPercent}%</span>
+                      </div>
+
+                      <p style={{ fontSize: '12px', color: '#94a3b8', textAlign: 'center', margin: 0 }}>
+                        {progress?.message ?? 'Jendela browser Playwright akan terbuka otomatis saat scrape berjalan.'}
+                      </p>
+                    </CardContent>
+                  </Card>
                 </div>
-                <div className="history-stack">
-                  {runs.map((run) => (
-                    <div key={run.id} className="history-item static">
+              )}
+
+              {/* RESULTS VIEW */}
+              {view === 'results' && (
+                <Card>
+                  <CardHeader>
+                    <div className="toolbar-container">
                       <div>
-                        <strong>{run.keyword}</strong>
-                        <p>
-                          {run.location} | {new Date(run.createdAt).toLocaleString()} |{' '}
-                          {run.totalResults} results
-                        </p>
+                        <CardTitle>Data Hasil Scraping</CardTitle>
+                        <CardDescription>
+                          {selectedRun
+                            ? `${selectedRun.keyword} di ${selectedRun.location} (${filteredResults.length} data)`
+                            : 'Pilih sesi pencarian'}
+                        </CardDescription>
                       </div>
-                      <div className="button-row compact">
-                        <span className={`badge ${run.status}`}>{run.status}</span>
-                        <button
-                          className="ghost-button"
-                          onClick={() => {
-                            setSelectedRunId(run.id)
-                            setView('results')
-                          }}
+
+                      {/* TOOLBAR CONTROLS */}
+                      <div className="toolbar-group">
+                        <div style={{ width: '180px' }}>
+                          <Select
+                            value={selectedRunId}
+                            onChange={(e) => setSelectedRunId(e.target.value)}
+                          >
+                            {runs.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {r.keyword} - {r.location}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
+
+                        <div style={{ width: '160px' }}>
+                          <Input
+                            icon={<Search className="icon-sm" />}
+                            placeholder="Cari..."
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                          />
+                        </div>
+
+                        <div style={{ width: '140px' }}>
+                          <Select
+                            value={sortKey}
+                            onChange={(e) => setSortKey(e.target.value as SortKey)}
+                          >
+                            <option value="name">Urut: Nama</option>
+                            <option value="category">Urut: Kategori</option>
+                            <option value="rating">Urut: Rating</option>
+                            <option value="reviewCount">Urut: Ulasan</option>
+                          </Select>
+                        </div>
+
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          title="Ubah Arah Urutan"
+                          onClick={() => setSortDirection((c) => (c === 'asc' ? 'desc' : 'asc'))}
                         >
-                          Open
-                        </button>
-                        <button
-                          className="danger-button"
+                          <ArrowUpDown className="icon-sm" />
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+
+                  <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {/* BATCH ACTION TOOLBAR */}
+                    <div className="flex-between">
+                      <div className="flex-gap-2">
+                        <Button variant="secondary" size="sm" onClick={() => void handleExport('csv')}>
+                          <Download className="icon-sm" />
+                          Export CSV
+                        </Button>
+
+                        <Button variant="secondary" size="sm" onClick={() => void handleExport('xlsx')}>
+                          <Download className="icon-sm" />
+                          Export XLSX
+                        </Button>
+
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!selectedRunId}
                           onClick={() =>
-                            void runAction(() => window.api.deleteRun(run.id), 'Run deleted')
+                            void runAction(
+                              () => window.api.deduplicateRun(selectedRunId),
+                              'Deduplikasi Selesai',
+                              'Data duplikat telah dibersihkan'
+                            )
                           }
                         >
-                          Delete
-                        </button>
+                          <Sparkles className="icon-sm" style={{ color: '#fbbf24' }} />
+                          Deduplikasi
+                        </Button>
+
+                        {selectedIds.length > 0 && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() =>
+                              void runAction(
+                                () => window.api.deleteResults(selectedIds),
+                                'Penghapusan Berhasil',
+                                `${selectedIds.length} baris telah dihapus`
+                              )
+                            }
+                          >
+                            <Trash2 className="icon-sm" />
+                            Hapus ({selectedIds.length})
+                          </Button>
+                        )}
                       </div>
+
+                      <Switch
+                        label="Hanya yang punya Telepon"
+                        checked={hasPhoneOnly}
+                        onChange={(e) => setHasPhoneOnly(e.target.checked)}
+                      />
                     </div>
-                  ))}
-                </div>
-              </section>
-            )}
 
-            {view === 'settings' && (
-              <section className="panel split">
-                <div>
-                  <div className="panel-head">
-                    <h3>Settings</h3>
-                    <span>Browser, data, and application behavior</span>
-                  </div>
-                  <label className="toggle-field">
-                    <input
-                      type="checkbox"
-                      checked={settings.headless}
-                      onChange={(event) =>
-                        setSettings((current) => ({ ...current, headless: event.target.checked }))
-                      }
-                    />
-                    <span>Headless browser</span>
-                  </label>
-                  <label className="field">
-                    <span>Scraping delay (ms)</span>
-                    <input
-                      type="number"
-                      value={settings.delayMs}
-                      onChange={(event) =>
-                        setSettings((current) => ({
-                          ...current,
-                          delayMs: Number(event.target.value) || 0
-                        }))
-                      }
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Timeout (ms)</span>
-                    <input
-                      type="number"
-                      value={settings.timeoutMs}
-                      onChange={(event) =>
-                        setSettings((current) => ({
-                          ...current,
-                          timeoutMs: Number(event.target.value) || 0
-                        }))
-                      }
-                    />
-                  </label>
-                  <label className="toggle-field">
-                    <input
-                      type="checkbox"
-                      checked={settings.autoDeduplicate}
-                      onChange={(event) =>
-                        setSettings((current) => ({
-                          ...current,
-                          autoDeduplicate: event.target.checked
-                        }))
-                      }
-                    />
-                    <span>Auto deduplicate</span>
-                  </label>
-                  <label className="toggle-field">
-                    <input
-                      type="checkbox"
-                      checked={settings.autoSave}
-                      onChange={(event) =>
-                        setSettings((current) => ({ ...current, autoSave: event.target.checked }))
-                      }
-                    />
-                    <span>Auto save</span>
-                  </label>
-                  <label className="field">
-                    <span>Export directory</span>
-                    <input
-                      value={settings.exportDirectory}
-                      onChange={(event) =>
-                        setSettings((current) => ({
-                          ...current,
-                          exportDirectory: event.target.value
-                        }))
-                      }
-                    />
-                  </label>
-                  <div className="button-row">
-                    <button
-                      className="primary-button"
-                      onClick={() =>
-                        void runAction(() => window.api.saveSettings(settings), 'Settings saved')
-                      }
-                    >
-                      Save Settings
-                    </button>
-                    <button
-                      className="ghost-button"
-                      onClick={() =>
-                        void runAction(async () => {
-                          const next = await window.api.resetSettings()
-                          setSettings(next)
-                        }, 'Settings reset')
-                      }
-                    >
-                      Reset
-                    </button>
-                  </div>
-                </div>
+                    {/* RESULTS TABLE & DETAIL DRAWER GRID */}
+                    <div className="grid-2col">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead style={{ width: '40px' }}>
+                              <input
+                                type="checkbox"
+                                style={{ borderRadius: '4px', cursor: 'pointer' }}
+                                checked={
+                                  filteredResults.length > 0 &&
+                                  selectedIds.length === filteredResults.length
+                                }
+                                onChange={toggleSelectAll}
+                              />
+                            </TableHead>
+                            <TableHead>Nama Bisnis</TableHead>
+                            <TableHead>Kategori</TableHead>
+                            <TableHead>Rating</TableHead>
+                            <TableHead>Telepon</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {filteredResults.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={5} style={{ textAlign: 'center', color: '#94a3b8', padding: '30px' }}>
+                                Tidak ada data hasil scraping yang cocok.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            filteredResults.map((item) => (
+                              <TableRow
+                                key={item.id}
+                                className={detail?.id === item.id ? 'selected' : ''}
+                              >
+                                <TableCell>
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedIds.includes(item.id)}
+                                    onChange={() => toggleSelection(item.id)}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <button
+                                    className="table-btn-link"
+                                    onClick={() => setDetail(item)}
+                                    title={item.name}
+                                  >
+                                    {item.name}
+                                  </button>
+                                </TableCell>
+                                <TableCell>
+                                  {item.category ? (
+                                    <Badge variant="outline">{item.category}</Badge>
+                                  ) : (
+                                    '-'
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  {item.rating ? (
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#fbbf24', fontWeight: 600 }}>
+                                      <Star className="icon-sm" style={{ fill: '#fbbf24' }} />
+                                      {item.rating}
+                                    </span>
+                                  ) : (
+                                    '-'
+                                  )}
+                                </TableCell>
+                                <TableCell>{item.phone || '-'}</TableCell>
+                              </TableRow>
+                            ))
+                          )}
+                        </TableBody>
+                      </Table>
 
-                <div className="panel accent-panel">
-                  <h3>Storage Notes</h3>
-                  <p className="muted">
-                    History and results are stored locally in SQLite under the Electron user data
-                    directory.
-                  </p>
-                  <p className="muted">
-                    Exports are generated as CSV or XLSX into the configured export folder.
-                  </p>
-                  <p className="muted">
-                    Google Maps selectors may change over time, so the scraper logic may need
-                    refresh if Google updates the UI.
-                  </p>
+                      {/* DETAIL CARD DRAWER */}
+                      <Card className="sticky-inspect-card">
+                        <CardHeader>
+                          <CardTitle style={{ fontSize: '14px' }}>Detail Informasi</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          {detail ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '12px' }}>
+                              <div>
+                                <h4 style={{ fontSize: '14px', fontWeight: 700, color: '#f8fafc', margin: 0 }}>
+                                  {detail.name}
+                                </h4>
+                                <p style={{ color: '#94a3b8', margin: '2px 0 0 0' }}>{detail.category || 'Tanpa Kategori'}</p>
+                              </div>
+
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', color: '#cbd5e1' }}>
+                                  <MapPin className="icon-sm" style={{ color: '#94a3b8', marginTop: '2px' }} />
+                                  <span>{detail.address || 'Alamat tidak tersedia'}</span>
+                                </div>
+
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#cbd5e1' }}>
+                                  <Phone className="icon-sm" style={{ color: '#94a3b8' }} />
+                                  <span>{detail.phone || 'Nomor HP tidak ada'}</span>
+                                </div>
+
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#cbd5e1' }}>
+                                  <Globe className="icon-sm" style={{ color: '#94a3b8' }} />
+                                  {detail.website ? (
+                                    <a
+                                      href={detail.website}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      style={{ color: '#60a5fa', wordBreak: 'break-all' }}
+                                    >
+                                      {detail.website}
+                                    </a>
+                                  ) : (
+                                    <span>Website tidak ada</span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex-between" style={{ paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                                <span style={{ color: '#94a3b8' }}>Rating & Ulasan</span>
+                                <span style={{ fontWeight: 600, color: '#f8fafc' }}>
+                                  ★ {detail.rating ?? '-'} ({detail.reviewCount ?? 0} ulasan)
+                                </span>
+                              </div>
+
+                              {detail.latitude && detail.longitude && (
+                                <div style={{ color: '#94a3b8' }}>
+                                  Koordinat: {detail.latitude}, {detail.longitude}
+                                </div>
+                              )}
+
+                              <div style={{ paddingTop: '10px' }}>
+                                <a
+                                  href={detail.mapsUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '8px',
+                                    width: '100%',
+                                    padding: '8px 12px',
+                                    borderRadius: '6px',
+                                    backgroundColor: '#2563eb',
+                                    color: '#ffffff',
+                                    fontWeight: 500,
+                                    textDecoration: 'none',
+                                    fontSize: '12px'
+                                  }}
+                                >
+                                  <ExternalLink className="icon-sm" />
+                                  Buka di Google Maps
+                                </a>
+                              </div>
+                            </div>
+                          ) : (
+                            <p style={{ fontSize: '12px', color: '#94a3b8', textAlign: 'center', padding: '24px 0', margin: 0 }}>
+                              Pilih salah satu baris di tabel untuk melihat rincian informasi bisnis.
+                            </p>
+                          )}
+                        </CardContent>
+                      </Card>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* HISTORY VIEW */}
+              {view === 'history' && (
+                <Card>
+                  <CardHeader>
+                    <div className="flex-between">
+                      <div>
+                        <CardTitle>Riwayat Pencarian</CardTitle>
+                        <CardDescription>Daftar semua sesi scraping yang telah tersimpan</CardDescription>
+                      </div>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() =>
+                          void runAction(
+                            () => window.api.clearHistory(),
+                            'Riwayat Dibersihkan',
+                            'Semua data riwayat dan hasil telah dihapus'
+                          )
+                        }
+                      >
+                        <Trash2 className="icon-sm" />
+                        Hapus Semua Riwayat
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    {runs.length === 0 ? (
+                      <p style={{ fontSize: '13px', color: '#94a3b8', textAlign: 'center', padding: '30px 0' }}>
+                        Belum ada riwayat scraping.
+                      </p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {runs.map((run) => (
+                          <div key={run.id} className="history-card-item">
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              <div className="flex-gap-2">
+                                <span style={{ fontWeight: 600, color: '#f8fafc', fontSize: '14px' }}>{run.keyword}</span>
+                                <Badge variant="outline">{run.location}</Badge>
+                                <Badge variant={getBadgeVariant(run.status)}>{run.status}</Badge>
+                              </div>
+                              <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                                Dibuat: {new Date(run.createdAt).toLocaleString('id-ID')} • Hasil:{' '}
+                                {run.totalResults} tempat
+                              </span>
+                            </div>
+
+                            <div className="flex-gap-2">
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => {
+                                  setSelectedRunId(run.id)
+                                  setView('results')
+                                }}
+                              >
+                                Lihat Data
+                              </Button>
+
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() =>
+                                  void runAction(
+                                    () => window.api.deleteRun(run.id),
+                                    'Sesi Dihapus',
+                                    `Sesi ${run.keyword} dihapus`
+                                  )
+                                }
+                              >
+                                Hapus
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* SETTINGS VIEW */}
+              {view === 'settings' && (
+                <div className="grid-2col">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Pengaturan Scraper</CardTitle>
+                      <CardDescription>Atur preferensi browser, jeda waktu, dan penyimpanan.</CardDescription>
+                    </CardHeader>
+                    <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                      <Switch
+                        label="Mode Headless Browser"
+                        description="Jalankan Playwright Chromium di latar belakang tanpa membuka jendela tampilan visual."
+                        checked={settings.headless}
+                        onChange={(e) =>
+                          setSettings((c) => ({ ...c, headless: e.target.checked }))
+                        }
+                      />
+
+                      <div className="form-field">
+                        <label className="form-label">
+                          Jeda Antar Halaman / Delay (milidetik)
+                        </label>
+                        <Input
+                          type="number"
+                          value={settings.delayMs}
+                          onChange={(e) =>
+                            setSettings((c) => ({
+                              ...c,
+                              delayMs: Math.max(0, Number(e.target.value) || 0)
+                            }))
+                          }
+                        />
+                        <span className="form-hint">
+                          Waktu tunggu sebelum mengambil detail tempat berikutnya (default: 1200ms).
+                        </span>
+                      </div>
+
+                      <div className="form-field">
+                        <label className="form-label">
+                          Waktu Batas / Timeout (milidetik)
+                        </label>
+                        <Input
+                          type="number"
+                          value={settings.timeoutMs}
+                          onChange={(e) =>
+                            setSettings((c) => ({
+                              ...c,
+                              timeoutMs: Math.max(1000, Number(e.target.value) || 30000)
+                            }))
+                          }
+                        />
+                      </div>
+
+                      <Switch
+                        label="Otomatis Deduplikasi"
+                        description="Hapus otomatis data usaha dengan URL Google Maps yang sama setelah scraping selesai."
+                        checked={settings.autoDeduplicate}
+                        onChange={(e) =>
+                          setSettings((c) => ({ ...c, autoDeduplicate: e.target.checked }))
+                        }
+                      />
+
+                      <Switch
+                        label="Simpan Otomatis Ke Database"
+                        description="Simpan setiap baris data langsung ke database SQLite lokal."
+                        checked={settings.autoSave}
+                        onChange={(e) =>
+                          setSettings((c) => ({ ...c, autoSave: e.target.checked }))
+                        }
+                      />
+
+                      <div className="form-field">
+                        <label className="form-label">
+                          Folder Lokasi Ekspor File
+                        </label>
+                        <Input
+                          value={settings.exportDirectory}
+                          onChange={(e) =>
+                            setSettings((c) => ({ ...c, exportDirectory: e.target.value }))
+                          }
+                        />
+                      </div>
+                    </CardContent>
+                    <CardFooter style={{ justifyContent: 'flex-start' }}>
+                      <Button
+                        variant="default"
+                        onClick={() =>
+                          void runAction(
+                            () => window.api.saveSettings(settings),
+                            'Pengaturan Disimpan',
+                            'Konfigurasi baru berhasil diterapkan'
+                          )
+                        }
+                      >
+                        Simpan Pengaturan
+                      </Button>
+
+                      <Button
+                        variant="outline"
+                        onClick={() =>
+                          void runAction(async () => {
+                            const reset = await window.api.resetSettings()
+                            setSettings(reset)
+                          }, 'Pengaturan Direset')
+                        }
+                      >
+                        Reset Default
+                      </Button>
+                    </CardFooter>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Informasi Sistem</CardTitle>
+                    </CardHeader>
+                    <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '12px', color: '#94a3b8' }}>
+                      <p style={{ margin: 0 }}>
+                        <strong style={{ color: '#f8fafc' }}>Penyimpanan Database:</strong> SQLite lokal di folder `userData` Electron.
+                      </p>
+                      <p style={{ margin: 0 }}>
+                        <strong style={{ color: '#f8fafc' }}>Format Ekspor:</strong> CSV (UTF-8) & Spreadsheet Excel (XLSX).
+                      </p>
+                      <p style={{ margin: 0 }}>
+                        <strong style={{ color: '#f8fafc' }}>Engine Scraping:</strong> Playwright Chromium Automation Engine.
+                      </p>
+                    </CardContent>
+                  </Card>
                 </div>
-              </section>
-            )}
-          </>
-        )}
+              )}
+            </>
+          )}
+        </div>
       </main>
+
+      {/* TOAST CONTAINER */}
+      <ToastContainer toasts={toasts} onDismiss={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
     </div>
   )
 }

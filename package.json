@@ -25,6 +25,7 @@
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "electron-updater": "^6.3.9",
+    "lucide-react": "^1.40.0",
     "playwright": "^1.62.1",
     "xlsx": "^0.18.5"
   },

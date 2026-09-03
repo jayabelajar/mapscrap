@@ -84,12 +84,41 @@ async function collectPlaceUrls(
   maxResults: number,
   control: JobControl
 ): Promise<string[]> {
-  const urls = new Set<string>()
-  const listSelector = 'div[role="feed"]'
-  await page.waitForSelector(listSelector, { timeout: 15000 })
+  // If Google Maps directly loaded a single place page instead of a list
+  if (page.url().includes('/maps/place/')) {
+    return [page.url()]
+  }
 
-  while (urls.size < maxResults && !control.stopped) {
-    await waitWhilePaused(control)
+  const urls = new Set<string>()
+  const listSelectors = ['div[role="feed"]', 'div.m6QEdf[aria-label]', 'div.m6QEdf']
+  let activeListSelector = ''
+
+  for (const selector of listSelectors) {
+    if ((await page.locator(selector).count()) > 0) {
+      activeListSelector = selector
+      break
+    }
+  }
+
+  if (!activeListSelector) {
+    try {
+      await page.waitForSelector('div[role="feed"], div.m6QEdf', { timeout: 10000 })
+      for (const selector of listSelectors) {
+        if ((await page.locator(selector).count()) > 0) {
+          activeListSelector = selector
+          break
+        }
+      }
+    } catch {
+      // Check if redirected to a place during wait
+      if (page.url().includes('/maps/place/')) {
+        return [page.url()]
+      }
+    }
+  }
+
+  if (!activeListSelector) {
+    // Fallback: search links directly on page
     const anchors = await page
       .locator('a[href*="/maps/place/"]')
       .evaluateAll((nodes) => nodes.map((node) => (node as HTMLAnchorElement).href))
@@ -101,13 +130,39 @@ async function collectPlaceUrls(
         break
       }
     }
+    return Array.from(urls).slice(0, maxResults)
+  }
 
-    const feed = page.locator(listSelector).first()
-    const previousHeight = await feed.evaluate((node) => node.scrollHeight)
-    await feed.evaluate((node) => node.scrollBy(0, node.scrollHeight))
+  let noNewResultsCount = 0
+  while (urls.size < maxResults && !control.stopped && noNewResultsCount < 5) {
+    await waitWhilePaused(control)
+
+    const initialSize = urls.size
+    const anchors = await page
+      .locator('a[href*="/maps/place/"]')
+      .evaluateAll((nodes) => nodes.map((node) => (node as HTMLAnchorElement).href))
+
+    for (const url of anchors) {
+      if (url) {
+        urls.add(url)
+      }
+      if (urls.size >= maxResults) {
+        break
+      }
+    }
+
+    if (urls.size === initialSize) {
+      noNewResultsCount += 1
+    } else {
+      noNewResultsCount = 0
+    }
+
+    const feed = page.locator(activeListSelector).first()
+    const previousHeight = await feed.evaluate((node) => node.scrollHeight).catch(() => 0)
+    await feed.evaluate((node) => node.scrollBy(0, node.scrollHeight)).catch(() => undefined)
     await page.waitForTimeout(1200)
-    const nextHeight = await feed.evaluate((node) => node.scrollHeight)
-    if (nextHeight === previousHeight) {
+    const nextHeight = await feed.evaluate((node) => node.scrollHeight).catch(() => 0)
+    if (nextHeight === previousHeight && urls.size >= maxResults) {
       break
     }
   }
@@ -122,26 +177,59 @@ async function scrapePlace(
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => undefined)
 
-  const name = await textContent(page, 'h1')
-  const category = await textContent(page, 'button[jsaction*="pane.rating.category"]')
-  const address = await textContent(page, 'button[data-item-id="address"]')
-  const phone = await textContent(page, 'button[data-item-id^="phone"]')
-  const website = await attribute(page, 'a[data-item-id="authority"]', 'href')
-  const ratingText = await textContent(page, 'div[role="main"] span[role="img"]')
-  const reviewText = await textContent(page, 'button[jsaction*="pane.reviewChart.moreReviews"]')
+  const name =
+    (await textContent(page, 'h1.DUwfxb')) ||
+    (await textContent(page, 'h1.fontHeadlineLarge')) ||
+    (await textContent(page, 'h1'))
+
+  const category =
+    (await textContent(page, 'button[jsaction*="pane.rating.category"]')) ||
+    (await textContent(page, 'button[jsaction*="category"]')) ||
+    (await textContent(page, 'span.DkA2fd'))
+
+  const address =
+    (await textContent(page, 'button[data-item-id="address"]')) ||
+    (await textContent(page, 'div[data-item-id="address"]'))
+
+  const phone =
+    (await textContent(page, 'button[data-item-id^="phone"]')) ||
+    (await textContent(page, 'div[data-item-id^="phone"]'))
+
+  const website =
+    (await attribute(page, 'a[data-item-id="authority"]', 'href')) ||
+    (await attribute(page, 'a[aria-label*="website"]', 'href'))
+
+  const ratingText =
+    (await textContent(page, 'div[role="main"] span[role="img"]')) ||
+    (await textContent(page, 'span.ceNzKf')) ||
+    (await attribute(page, 'span[role="img"][aria-label*="star"]', 'aria-label'))
+
+  const reviewText =
+    (await textContent(page, 'button[jsaction*="pane.reviewChart.moreReviews"]')) ||
+    (await textContent(page, 'button[jsaction*="reviews"]')) ||
+    (await textContent(page, 'span[aria-label*="reviews"]'))
+
   const { latitude, longitude } = parseCoordinateFromUrl(page.url())
 
-  const ratingMatch = ratingText.match(/([\d.]+)/)
+  const ratingMatch = ratingText.match(/([\d.,]+)/)
   const reviewMatch = reviewText.replace(/[^\d]/g, '')
+
+  let parsedRating: number | null = null
+  if (ratingMatch) {
+    const normalizedRating = parseFloat(ratingMatch[1].replace(',', '.'))
+    if (!isNaN(normalizedRating) && normalizedRating <= 5) {
+      parsedRating = normalizedRating
+    }
+  }
 
   return {
     runId: '',
-    name,
+    name: name || 'Tanpa Nama',
     category,
     address,
     phone,
     website,
-    rating: ratingMatch ? Number(ratingMatch[1]) : null,
+    rating: parsedRating,
     reviewCount: reviewMatch ? Number(reviewMatch) : null,
     mapsUrl: page.url(),
     latitude,
@@ -171,7 +259,7 @@ export class GoogleMapsScraper {
         status: 'running',
         current: 0,
         total: form.maxResults,
-        message: 'Opening Google Maps'
+        message: 'Membuka Google Maps...'
       })
 
       await page.goto(`https://www.google.com/maps/search/${query}`, {
@@ -181,6 +269,19 @@ export class GoogleMapsScraper {
       await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => undefined)
 
       const urls = await collectPlaceUrls(page, form.maxResults, control)
+      
+      if (urls.length === 0) {
+        handlers.onProgress({
+          runId,
+          status: 'completed',
+          current: 0,
+          total: form.maxResults,
+          message: 'Tidak ditemukan lokasi sesuai keyword'
+        })
+        await page.close()
+        return
+      }
+
       const detailPage = await this.browser.newPage()
       detailPage.setDefaultTimeout(settings.timeoutMs)
 
@@ -198,7 +299,7 @@ export class GoogleMapsScraper {
           status: control.paused ? 'paused' : 'running',
           current: index + 1,
           total: form.maxResults,
-          message: `Collected ${index + 1} of ${form.maxResults}`
+          message: `Mengumpulkan data (${index + 1}/${Math.min(urls.length, form.maxResults)})`
         })
         mainWindow.webContents.send('scrape:result', record)
         await sleep(settings.delayMs)
@@ -218,3 +319,4 @@ export class GoogleMapsScraper {
     this.browser = null
   }
 }
+
