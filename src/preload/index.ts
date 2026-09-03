@@ -11,7 +11,7 @@ import type {
 
 // Custom APIs for renderer
 const api = {
-  getSnapshot: () => ipcRenderer.invoke('app:getSnapshot'),
+  getSnapshot: (userEmail?: string) => ipcRenderer.invoke('app:getSnapshot', userEmail),
   startScrape: (form: ScrapeFormData) => ipcRenderer.invoke('scrape:start', form),
   pauseScrape: () => ipcRenderer.invoke('scrape:pause'),
   resumeScrape: () => ipcRenderer.invoke('scrape:resume'),
@@ -19,12 +19,14 @@ const api = {
   saveSettings: (settings: Partial<SettingsData>) => ipcRenderer.invoke('settings:save', settings),
   resetSettings: () => ipcRenderer.invoke('settings:reset'),
   openExportDirectory: () => ipcRenderer.invoke('settings:openExportDirectory'),
+  selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
   listResults: (query: ResultsQuery) => ipcRenderer.invoke('results:list', query),
   deleteResults: (ids: string[]) => ipcRenderer.invoke('results:delete', ids),
   deduplicateRun: (runId: string) => ipcRenderer.invoke('results:deduplicate', runId),
   deleteRun: (runId: string) => ipcRenderer.invoke('history:delete', runId),
-  clearHistory: () => ipcRenderer.invoke('history:clear'),
+  clearHistory: (userEmail?: string) => ipcRenderer.invoke('history:clear', userEmail),
   exportResults: (payload: ExportPayload) => ipcRenderer.invoke('export:run', payload),
+  exportResultsSaveAs: (payload: ExportPayload) => ipcRenderer.invoke('export:saveAs', payload),
   onProgress: (listener: (payload: ScrapeProgressPayload) => void) => {
     const handler = (_event: unknown, payload: ScrapeProgressPayload): void => listener(payload)
     ipcRenderer.on('scrape:progress', handler)

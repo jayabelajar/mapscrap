@@ -1,5 +1,6 @@
-import { app, ipcMain, shell } from 'electron'
+import { app, dialog, ipcMain, shell } from 'electron'
 import type { BrowserWindow } from 'electron'
+import { basename, dirname } from 'path'
 import { DatabaseService } from './database'
 import { ExportService } from './exporter'
 import { GoogleMapsScraper } from './scraper'
@@ -34,13 +35,23 @@ export class IpcController {
   constructor(private readonly mainWindow: BrowserWindow) {}
 
   register(): void {
-    ipcMain.handle('app:getSnapshot', () => this.getSnapshot())
+    ipcMain.handle('app:getSnapshot', (_, userEmail?: string) => this.getSnapshot(userEmail))
     ipcMain.handle('settings:save', (_, next: Partial<SettingsData>) => this.settings.save(next))
     ipcMain.handle('settings:reset', () => this.settings.reset())
     ipcMain.handle('settings:openExportDirectory', async () => {
       const settings = this.settings.get()
       await shell.openPath(settings.exportDirectory)
       return settings.exportDirectory
+    })
+    ipcMain.handle('dialog:selectDirectory', async () => {
+      const result = await dialog.showOpenDialog(this.mainWindow, {
+        properties: ['openDirectory'],
+        title: 'Pilih Folder Lokasi Ekspor'
+      })
+      if (result.canceled || result.filePaths.length === 0) {
+        return null
+      }
+      return result.filePaths[0]
     })
     ipcMain.handle('results:list', (_, query: ResultsQuery) => this.database.listBusinesses(query))
     ipcMain.handle('results:delete', (_, ids: string[]) => {
@@ -52,8 +63,8 @@ export class IpcController {
       this.database.deleteRun(runId)
       return true
     })
-    ipcMain.handle('history:clear', () => {
-      this.database.clearHistory()
+    ipcMain.handle('history:clear', (_, userEmail?: string) => {
+      this.database.clearHistory(userEmail)
       return true
     })
     ipcMain.handle('scrape:start', (_, form: ScrapeFormData) => this.startScrape(form))
@@ -61,17 +72,19 @@ export class IpcController {
     ipcMain.handle('scrape:resume', () => this.resumeScrape())
     ipcMain.handle('scrape:stop', () => this.stopScrape())
     ipcMain.handle('export:run', (_, payload: ExportPayload) => this.exportResults(payload))
+    ipcMain.handle('export:saveAs', (_, payload: ExportPayload) => this.exportResultsSaveAs(payload))
   }
 
-  private getSnapshot(): DashboardSnapshot {
-    const latestRun = this.database.listRuns()[0] ?? null
+  private getSnapshot(userEmail?: string): DashboardSnapshot {
+    const runs = this.database.listRuns(userEmail)
+    const latestRun = runs[0] ?? null
     const selectedRunId = this.activeJob?.run.id ?? latestRun?.id
 
     return {
       settings: this.settings.get(),
       activeRun: this.activeJob?.run ?? null,
-      runs: this.database.listRuns(),
-      results: selectedRunId ? this.database.listBusinesses({ runId: selectedRunId }) : [],
+      runs,
+      results: selectedRunId ? this.database.listBusinesses({ runId: selectedRunId, userEmail }) : [],
       progress: this.progress
     }
   }
@@ -98,9 +111,9 @@ export class IpcController {
       throw new Error('Location wajib diisi')
     }
 
-    const run = this.database.createRun(keyword, location, maxResults)
+    const run = this.database.createRun(keyword, location, maxResults, form.userEmail || '')
     const control = { paused: false, stopped: false }
-    const normalizedForm = { keyword, location, maxResults }
+    const normalizedForm = { keyword, location, maxResults, userEmail: form.userEmail }
     this.activeJob = { run, form: normalizedForm, control }
 
     this.emitProgress({
@@ -234,4 +247,35 @@ export class IpcController {
       : `mapscraper-${app.getName().toLowerCase()}`
     return this.exporter.exportBusinesses(payload.format, records, label, this.settings.get())
   }
+
+  private async exportResultsSaveAs(payload: ExportPayload): Promise<string | null> {
+    const all = this.database.listBusinesses({ runId: payload.runId })
+    const records = payload.ids?.length ? all.filter((item) => payload.ids?.includes(item.id)) : all
+    if (records.length === 0) {
+      throw new Error('Tidak ada data untuk diekspor')
+    }
+    const run = this.database.getRun(payload.runId)
+    const defaultName = run
+      ? `${run.keyword}-${run.location}-${new Date(run.createdAt).toISOString().slice(0, 10)}.${payload.format}`
+      : `mapscraper-export.${payload.format}`
+
+    const result = await dialog.showSaveDialog(this.mainWindow, {
+      title: `Simpan File Hasil Scrape (${payload.format.toUpperCase()})`,
+      defaultPath: defaultName,
+      filters:
+        payload.format === 'csv'
+          ? [{ name: 'CSV Document (*.csv)', extensions: ['csv'] }]
+          : [{ name: 'Excel Workbook (*.xlsx)', extensions: ['xlsx'] }]
+    })
+
+    if (result.canceled || !result.filePath) {
+      return null
+    }
+
+    const targetDir = dirname(result.filePath)
+    const fileLabel = basename(result.filePath, `.${payload.format}`)
+    const tempSettings = { ...this.settings.get(), exportDirectory: targetDir }
+    return this.exporter.exportBusinesses(payload.format, records, fileLabel, tempSettings)
+  }
 }
+

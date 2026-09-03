@@ -7,6 +7,7 @@ import { createId, nowIso } from './utils'
 
 type RunRow = {
   id: string
+  user_email: string
   keyword: string
   location: string
   status: RunStatus
@@ -35,6 +36,7 @@ type BusinessRow = {
 function mapRun(row: RunRow): ScrapeRunRecord {
   return {
     id: row.id,
+    userEmail: row.user_email || undefined,
     keyword: row.keyword,
     location: row.location,
     status: row.status,
@@ -75,6 +77,7 @@ export class DatabaseService {
 
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY,
+        user_email TEXT NOT NULL DEFAULT '',
         keyword TEXT NOT NULL,
         location TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -102,12 +105,19 @@ export class DatabaseService {
         FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
       );
     `)
+
+    try {
+      this.db.exec(`ALTER TABLE runs ADD COLUMN user_email TEXT NOT NULL DEFAULT ''`)
+    } catch {
+      // Column already exists
+    }
   }
 
-  createRun(keyword: string, location: string, maxResults: number): ScrapeRunRecord {
+  createRun(keyword: string, location: string, maxResults: number, userEmail = ''): ScrapeRunRecord {
     const now = nowIso()
     const run: ScrapeRunRecord = {
       id: createId(),
+      userEmail,
       keyword,
       location,
       status: 'running',
@@ -120,12 +130,13 @@ export class DatabaseService {
     this.db
       .prepare(
         `
-          INSERT INTO runs (id, keyword, location, status, total_results, max_results, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO runs (id, user_email, keyword, location, status, total_results, max_results, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
       )
       .run(
         run.id,
+        run.userEmail ?? '',
         run.keyword,
         run.location,
         run.status,
@@ -169,8 +180,15 @@ export class DatabaseService {
     return row ? mapRun(row) : null
   }
 
-  listRuns(): ScrapeRunRecord[] {
-    const rows = this.db.prepare(`SELECT * FROM runs ORDER BY created_at DESC`).all() as RunRow[]
+  listRuns(userEmail?: string): ScrapeRunRecord[] {
+    let rows: RunRow[]
+    if (userEmail) {
+      rows = this.db
+        .prepare(`SELECT * FROM runs WHERE user_email = ? ORDER BY created_at DESC`)
+        .all(userEmail) as RunRow[]
+    } else {
+      rows = this.db.prepare(`SELECT * FROM runs ORDER BY created_at DESC`).all() as RunRow[]
+    }
     return rows.map(mapRun)
   }
 
@@ -225,19 +243,29 @@ export class DatabaseService {
     const values: string[] = []
 
     if (query.runId) {
-      conditions.push('run_id = ?')
+      conditions.push('b.run_id = ?')
       values.push(query.runId)
     }
 
+    if (query.userEmail) {
+      conditions.push('r.user_email = ?')
+      values.push(query.userEmail)
+    }
+
     if (query.search) {
-      conditions.push('(LOWER(name) LIKE ? OR LOWER(category) LIKE ? OR LOWER(address) LIKE ?)')
+      conditions.push('(LOWER(b.name) LIKE ? OR LOWER(b.category) LIKE ? OR LOWER(b.address) LIKE ?)')
       const value = `%${query.search.toLowerCase()}%`
       values.push(value, value, value)
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
     const rows = this.db
-      .prepare(`SELECT * FROM businesses ${where} ORDER BY scraped_at DESC`)
+      .prepare(
+        `SELECT b.* FROM businesses b
+         JOIN runs r ON b.run_id = r.id
+         ${where}
+         ORDER BY b.scraped_at DESC`
+      )
       .all(...values) as BusinessRow[]
     return rows.map(mapBusiness)
   }
@@ -284,8 +312,15 @@ export class DatabaseService {
     return row.count
   }
 
-  clearHistory(): void {
-    this.db.exec(`DELETE FROM businesses; DELETE FROM runs; VACUUM;`)
+  clearHistory(userEmail?: string): void {
+    if (userEmail) {
+      const runs = this.listRuns(userEmail)
+      for (const run of runs) {
+        this.deleteRun(run.id)
+      }
+    } else {
+      this.db.exec(`DELETE FROM businesses; DELETE FROM runs; VACUUM;`)
+    }
   }
 
   deleteDatabaseFile(): void {

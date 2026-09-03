@@ -21,7 +21,19 @@ import {
   Database,
   CheckCircle2,
   RefreshCw,
-  Table as TableIcon
+  Table as TableIcon,
+  User,
+  Lock,
+  Mail,
+  TrendingUp,
+  BarChart3,
+  Layers,
+  Sparkle,
+  Menu,
+  X,
+  Clock,
+  Cpu,
+  ShieldCheck
 } from 'lucide-react'
 
 import type {
@@ -33,7 +45,9 @@ import type {
 } from '../../shared/types'
 
 import {
+  AreaChart,
   Badge,
+  BarChart,
   Button,
   Card,
   CardContent,
@@ -42,6 +56,8 @@ import {
   CardHeader,
   CardTitle,
   Input,
+  LocationAutocomplete,
+  ProfileCard,
   Progress,
   Select,
   Switch,
@@ -68,15 +84,41 @@ const defaultSettings: SettingsData = {
 }
 
 const navItems: Array<{ key: ViewKey; label: string; icon: React.ReactNode }> = [
-  { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="icon-md" /> },
-  { key: 'scrape', label: 'Scrape Baru', icon: <Play className="icon-md" /> },
-  { key: 'results', label: 'Hasil Data', icon: <TableIcon className="icon-md" /> },
-  { key: 'history', label: 'Riwayat', icon: <HistoryIcon className="icon-md" /> },
-  { key: 'settings', label: 'Pengaturan', icon: <SettingsIcon className="icon-md" /> }
+  { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
+  { key: 'scrape', label: 'Scrape Baru', icon: <Play className="w-4 h-4" /> },
+  { key: 'results', label: 'Hasil Data', icon: <TableIcon className="w-4 h-4" /> },
+  { key: 'history', label: 'Riwayat', icon: <HistoryIcon className="w-4 h-4" /> },
+  { key: 'settings', label: 'Pengaturan', icon: <SettingsIcon className="w-4 h-4" /> }
 ]
 
 function App(): React.JSX.Element {
+  // Auth State & Persistence
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    return Boolean(localStorage.getItem('mapscraper_user'))
+  })
+  const [authScreen, setAuthScreen] = useState<'login' | 'register'>('login')
+  const [user, setUser] = useState<{ name: string; username: string; email: string }>(() => {
+    const saved = localStorage.getItem('mapscraper_user')
+    if (saved) {
+      try {
+        return JSON.parse(saved)
+      } catch {
+        // fallback
+      }
+    }
+    return {
+      name: 'Alex Scraper',
+      username: '@alex.scraper',
+      email: 'alex@mapscraper.com'
+    }
+  })
+  const [authForm, setAuthForm] = useState({ email: '', password: '', name: '' })
+
+  // Layout & Navigation State
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [view, setView] = useState<ViewKey>('dashboard')
+
+  // Scrape & Data State
   const [runs, setRuns] = useState<ScrapeRunRecord[]>([])
   const [results, setResults] = useState<BusinessRecord[]>([])
   const [activeRun, setActiveRun] = useState<ScrapeRunRecord | null>(null)
@@ -87,12 +129,12 @@ function App(): React.JSX.Element {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
   const [hasPhoneOnly, setHasPhoneOnly] = useState(false)
   const [settings, setSettings] = useState<SettingsData>(defaultSettings)
-  const [form, setForm] = useState({ keyword: 'Cafe', location: 'Surabaya', maxResults: 20 })
+  const [form, setForm] = useState({ keyword: 'Cafe', location: 'Surabaya, Jawa Timur', maxResults: 20 })
   const [detail, setDetail] = useState<BusinessRecord | null>(null)
   const [progress, setProgress] = useState<DashboardSnapshot['progress']>(null)
+  const [scrapeStartTime, setScrapeStartTime] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isBusy, setIsBusy] = useState(false)
-  const [statusMessage, setStatusMessage] = useState('Siap')
   const [toasts, setToasts] = useState<ToastState[]>([])
 
   const addToast = useCallback(
@@ -113,13 +155,16 @@ function App(): React.JSX.Element {
     setProgress(snapshot.progress)
     setResults(snapshot.results)
     setSelectedRunId((current) => current || snapshot.activeRun?.id || snapshot.runs[0]?.id || '')
-    setStatusMessage(snapshot.progress?.message ?? 'Siap')
   }, [])
 
+  // Load snapshot scoped to logged in user email
   useEffect(() => {
-    let cancelled = false
+    if (!isLoggedIn || !user.email) return
 
-    void window.api.getSnapshot().then((snapshot) => {
+    let cancelled = false
+    setIsLoading(true)
+
+    void window.api.getSnapshot(user.email).then((snapshot) => {
       if (cancelled) return
       applySnapshot(snapshot)
       setIsLoading(false)
@@ -127,7 +172,9 @@ function App(): React.JSX.Element {
 
     const offProgress = window.api.onProgress((payload) => {
       setProgress(payload)
-      setStatusMessage(payload.message)
+      if (payload.status === 'running' && !scrapeStartTime) {
+        setScrapeStartTime(Date.now())
+      }
       setRuns((current) =>
         current.map((run) =>
           run.id === payload.runId
@@ -169,13 +216,13 @@ function App(): React.JSX.Element {
       offProgress()
       offResult()
     }
-  }, [applySnapshot])
+  }, [isLoggedIn, user.email, applySnapshot])
 
   useEffect(() => {
-    if (!selectedRunId) return
+    if (!selectedRunId || !user.email) return
 
     let cancelled = false
-    void window.api.listResults({ runId: selectedRunId }).then((items) => {
+    void window.api.listResults({ runId: selectedRunId, userEmail: user.email }).then((items) => {
       if (!cancelled) {
         setResults(items)
       }
@@ -184,7 +231,7 @@ function App(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [selectedRunId])
+  }, [selectedRunId, user.email])
 
   const selectedRun = useMemo(
     () => runs.find((run) => run.id === selectedRunId) ?? activeRun ?? null,
@@ -234,6 +281,54 @@ function App(): React.JSX.Element {
     }
   }, [results, runs])
 
+  // Estimated Time Remaining calculation
+  const estimatedTimeText = useMemo(() => {
+    if (!progress || progress.status !== 'running' || progress.current === 0 || progress.total === 0) {
+      if (progress?.status === 'completed') return 'Selesai'
+      return '-'
+    }
+    const startTime = scrapeStartTime || Date.now()
+    const elapsedSeconds = Math.max(1, (Date.now() - startTime) / 1000)
+    const itemsPerSec = progress.current / elapsedSeconds
+    const remainingItems = Math.max(0, progress.total - progress.current)
+    const remainingSecs = Math.ceil(remainingItems / Math.max(0.01, itemsPerSec))
+
+    if (remainingSecs < 60) {
+      return `~${remainingSecs}d`
+    }
+    const mins = Math.floor(remainingSecs / 60)
+    const secs = remainingSecs % 60
+    return `~${mins}m ${secs}d`
+  }, [progress, scrapeStartTime])
+
+  // Chart Data Calculations
+  const areaChartData = useMemo(() => {
+    if (runs.length === 0) {
+      return [
+        { label: 'Sesi 1', value: 0 },
+        { label: 'Sesi 2', value: 0 },
+        { label: 'Sesi 3', value: 0 }
+      ]
+    }
+    return runs.slice(0, 6).reverse().map((r) => ({
+      label: r.keyword.slice(0, 8),
+      value: r.totalResults
+    }))
+  }, [runs])
+
+  const barChartData = useMemo(() => {
+    const counts: Record<string, number> = {}
+    results.forEach((r) => {
+      const cat = r.category || 'Tanpa Kategori'
+      counts[cat] = (counts[cat] || 0) + 1
+    })
+
+    return Object.entries(counts)
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 5)
+  }, [results])
+
   const runAction = async (
     task: () => Promise<unknown>,
     successTitle: string,
@@ -242,17 +337,16 @@ function App(): React.JSX.Element {
     setIsBusy(true)
     try {
       await task()
-      const snapshot = await window.api.getSnapshot()
+      const snapshot = await window.api.getSnapshot(user.email)
       applySnapshot(snapshot)
       const nextRunId = selectedRunId || snapshot.activeRun?.id || snapshot.runs[0]?.id
       if (nextRunId) {
-        const items = await window.api.listResults({ runId: nextRunId })
+        const items = await window.api.listResults({ runId: nextRunId, userEmail: user.email })
         setResults(items)
       }
       addToast(successTitle, successDesc, 'success')
     } catch (err) {
       const errText = err instanceof Error ? err.message : 'Operasi gagal'
-      setStatusMessage(errText)
       addToast('Gagal', errText, 'error')
     } finally {
       setIsBusy(false)
@@ -260,29 +354,42 @@ function App(): React.JSX.Element {
   }
 
   const startScrape = async (): Promise<void> => {
+    setScrapeStartTime(Date.now())
     await runAction(async () => {
-      const run = await window.api.startScrape(form)
+      const run = await window.api.startScrape({ ...form, userEmail: user.email })
       setSelectedRunId(run.id)
       setSelectedIds([])
       setView('results')
     }, 'Scrape Dimulai', `Mencari '${form.keyword}' di ${form.location}`)
   }
 
-  const handleExport = async (format: 'csv' | 'xlsx'): Promise<void> => {
+  const handleExportSaveAs = async (format: 'csv' | 'xlsx'): Promise<void> => {
     if (!selectedRunId) return
 
-    await runAction(async () => {
-      const exportedPath = await window.api.exportResults({
+    try {
+      const exportedPath = await window.api.exportResultsSaveAs({
         runId: selectedRunId,
         ids: selectedIds.length > 0 ? selectedIds : undefined,
         format
       })
-      addToast(
-        `Ekspor ${format.toUpperCase()} Berhasil`,
-        `File tersimpan di: ${exportedPath}`,
-        'success'
-      )
-    }, `Ekspor ${format.toUpperCase()} Selesai`)
+      if (exportedPath) {
+        addToast(`Ekspor ${format.toUpperCase()} Berhasil`, `Disimpan ke: ${exportedPath}`, 'success')
+      }
+    } catch (err) {
+      addToast('Gagal Ekspor', err instanceof Error ? err.message : 'Batal menyimpan', 'error')
+    }
+  }
+
+  const handleSelectDirectory = async (): Promise<void> => {
+    try {
+      const folderPath = await window.api.selectDirectory()
+      if (folderPath) {
+        setSettings((c) => ({ ...c, exportDirectory: folderPath }))
+        addToast('Folder Dipilih', folderPath, 'info')
+      }
+    } catch (err) {
+      addToast('Gagal Memilih Folder', 'Pilihan dibatalkan', 'error')
+    }
   }
 
   const toggleSelection = (id: string): void => {
@@ -295,6 +402,52 @@ function App(): React.JSX.Element {
     } else {
       setSelectedIds(filteredResults.map((r) => r.id))
     }
+  }
+
+  // Handle Login & Registration Submit
+  const handleAuthLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!authForm.email) {
+      addToast('Email Wajib Diisi', 'Silakan masukkan email Anda', 'warning')
+      return
+    }
+    const name = authForm.name || authForm.email.split('@')[0]
+    const userData = {
+      name: name.charAt(0).toUpperCase() + name.slice(1),
+      username: `@${name.toLowerCase().replace(/\s+/g, '')}`,
+      email: authForm.email.toLowerCase()
+    }
+    localStorage.setItem('mapscraper_user', JSON.stringify(userData))
+    setUser(userData)
+    setIsLoggedIn(true)
+    addToast('Selamat Datang!', `Berhasil masuk sebagai ${userData.name}`, 'success')
+  }
+
+  const handleAuthRegisterSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!authForm.email) {
+      addToast('Email Wajib Diisi', 'Silakan masukkan email Anda', 'warning')
+      return
+    }
+    const name = authForm.name || authForm.email.split('@')[0]
+    const userData = {
+      name: name.charAt(0).toUpperCase() + name.slice(1),
+      username: `@${name.toLowerCase().replace(/\s+/g, '')}`,
+      email: authForm.email.toLowerCase()
+    }
+    localStorage.setItem('mapscraper_user', JSON.stringify(userData))
+    setUser(userData)
+    setIsLoggedIn(true)
+    addToast('Pendaftaran Sukses', `Akun ${userData.name} berhasil dibuat!`, 'success')
+  }
+
+  const handleLogout = () => {
+    localStorage.removeItem('mapscraper_user')
+    setIsLoggedIn(false)
+    setAuthScreen('login')
+    setRuns([])
+    setResults([])
+    addToast('Sampai Jumpa', 'Anda telah keluar akun', 'info')
   }
 
   const activeStatus: RunStatus = activeRun?.status ?? progress?.status ?? 'idle'
@@ -318,28 +471,191 @@ function App(): React.JSX.Element {
     }
   }
 
+  // --- SEPARATE AUTH SCREENS (LOGIN vs REGISTER) ---
+  if (!isLoggedIn) {
+    return (
+      <div className="fixed inset-0 z-[9999] bg-[#090d16] text-slate-100 flex items-center justify-center p-4 select-none overflow-y-auto">
+        <div className="w-full max-w-md space-y-6 my-auto">
+          <div className="text-center space-y-2">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white flex items-center justify-center mx-auto shadow-2xl shadow-blue-500/20">
+              <Building2 className="w-7 h-7" />
+            </div>
+            <h1 className="text-2xl font-extrabold tracking-tight text-white m-0">MapScraper Pro</h1>
+            <p className="text-xs text-slate-400 m-0">Google Maps Lead Extractor & Data Collector</p>
+          </div>
+
+          {authScreen === 'login' ? (
+            /* DEDICATED LOGIN SCREEN */
+            <Card className="border-slate-800 bg-slate-900/90 shadow-2xl">
+              <CardHeader className="text-center pb-2">
+                <CardTitle className="text-base font-bold">Masuk Ke Akun Anda</CardTitle>
+                <CardDescription className="text-xs">
+                  Silakan masukkan email dan kata sandi Anda untuk melanjutkan
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-2">
+                <form onSubmit={handleAuthLoginSubmit} className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-slate-300">Email Pengguna</label>
+                    <Input
+                      type="email"
+                      icon={<Mail className="w-3.5 h-3.5" />}
+                      placeholder="alex@mapscraper.com"
+                      value={authForm.email}
+                      onChange={(e) => setAuthForm((c) => ({ ...c, email: e.target.value }))}
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-slate-300">Kata Sandi</label>
+                    <Input
+                      type="password"
+                      icon={<Lock className="w-3.5 h-3.5" />}
+                      placeholder="••••••••"
+                      value={authForm.password}
+                      onChange={(e) => setAuthForm((c) => ({ ...c, password: e.target.value }))}
+                      required
+                    />
+                  </div>
+
+                  <Button type="submit" className="w-full mt-3">
+                    Masuk Ke Aplikasi &rarr;
+                  </Button>
+                </form>
+
+                <div className="mt-5 text-center text-xs text-slate-400 pt-3 border-t border-slate-800/80">
+                  Belum memiliki akun?{' '}
+                  <button
+                    type="button"
+                    className="text-blue-400 font-semibold hover:underline bg-transparent border-0 cursor-pointer p-0"
+                    onClick={() => setAuthScreen('register')}
+                  >
+                    Daftar Akun Baru
+                  </button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            /* DEDICATED REGISTER SCREEN */
+            <Card className="border-slate-800 bg-slate-900/90 shadow-2xl">
+              <CardHeader className="text-center pb-2">
+                <CardTitle className="text-base font-bold">Pendaftaran Akun Baru</CardTitle>
+                <CardDescription className="text-xs">
+                  Buat akun baru untuk mulai melakukan ekstraksi data
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-2">
+                <form onSubmit={handleAuthRegisterSubmit} className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-slate-300">Nama Lengkap</label>
+                    <Input
+                      type="text"
+                      icon={<User className="w-3.5 h-3.5" />}
+                      placeholder="Contoh: Alex Pratama"
+                      value={authForm.name}
+                      onChange={(e) => setAuthForm((c) => ({ ...c, name: e.target.value }))}
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-slate-300">Email Pengguna</label>
+                    <Input
+                      type="email"
+                      icon={<Mail className="w-3.5 h-3.5" />}
+                      placeholder="alex@mapscraper.com"
+                      value={authForm.email}
+                      onChange={(e) => setAuthForm((c) => ({ ...c, email: e.target.value }))}
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-slate-300">Kata Sandi</label>
+                    <Input
+                      type="password"
+                      icon={<Lock className="w-3.5 h-3.5" />}
+                      placeholder="••••••••"
+                      value={authForm.password}
+                      onChange={(e) => setAuthForm((c) => ({ ...c, password: e.target.value }))}
+                      required
+                    />
+                  </div>
+
+                  <Button type="submit" className="w-full mt-3">
+                    Buat Akun Sekarang &rarr;
+                  </Button>
+                </form>
+
+                <div className="mt-5 text-center text-xs text-slate-400 pt-3 border-t border-slate-800/80">
+                  Sudah memiliki akun?{' '}
+                  <button
+                    type="button"
+                    className="text-blue-400 font-semibold hover:underline bg-transparent border-0 cursor-pointer p-0"
+                    onClick={() => setAuthScreen('login')}
+                  >
+                    Masuk di Sini
+                  </button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+        <ToastContainer toasts={toasts} onDismiss={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
+      </div>
+    )
+  }
+
   return (
-    <div className="app-shell">
+    <div className="flex h-screen w-screen overflow-hidden bg-[#090d16] text-slate-100 font-sans select-none relative">
+      {/* MOBILE OVERLAY BACKDROP */}
+      {mobileMenuOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-40 md:hidden backdrop-blur-xs"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      )}
+
       {/* SIDEBAR */}
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-icon">
-            <Building2 className="icon-lg" />
+      <aside
+        className={`fixed md:relative inset-y-0 left-0 z-50 w-60 min-w-60 h-full flex flex-col bg-[#060911] border-r border-slate-800/80 p-3.5 shrink-0 transition-transform duration-200 ease-in-out ${
+          mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+        }`}
+      >
+        <div className="flex items-center justify-between pb-3 border-b border-slate-800/60 px-1">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white flex items-center justify-center shadow-lg shadow-blue-500/20 shrink-0">
+              <Building2 className="w-5 h-5" />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <h1 className="text-sm font-bold tracking-tight text-white m-0 leading-tight">MapScraper</h1>
+              <p className="text-[11px] text-slate-400 m-0">Pro Lead Scraper</p>
+            </div>
           </div>
-          <div className="brand-info">
-            <h1>MapScraper</h1>
-            <p>Google Maps Lead Scraper</p>
-          </div>
+          <button
+            className="md:hidden text-slate-400 hover:text-white p-1 bg-transparent border-0 cursor-pointer"
+            onClick={() => setMobileMenuOpen(false)}
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        <nav className="sidebar-nav">
+        <nav className="flex flex-col gap-1 mt-3 flex-1 overflow-y-auto">
           {navItems.map((item) => (
             <button
               key={item.key}
-              className={`sidebar-link ${view === item.key ? 'active' : ''}`}
-              onClick={() => setView(item.key)}
+              className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors border border-transparent cursor-pointer ${
+                view === item.key
+                  ? 'bg-slate-800/90 text-white border-slate-700 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/50'
+              }`}
+              onClick={() => {
+                setView(item.key)
+                setMobileMenuOpen(false)
+              }}
             >
-              <div className="sidebar-link-inner">
+              <div className="flex items-center gap-2.5">
                 {item.icon}
                 <span>{item.label}</span>
               </div>
@@ -350,31 +666,36 @@ function App(): React.JSX.Element {
           ))}
         </nav>
 
-        <div className="sidebar-status-card">
-          <div className={`status-dot-indicator ${activeStatus}`} />
-          <div className="status-info">
-            <span className="status-label">{activeStatus}</span>
-            <p className="status-text">{statusMessage}</p>
-          </div>
-        </div>
+        {/* PROFILE FOOTER (STATUS CARD ABOVE REMOVED AS REQUESTED) */}
+        <ProfileCard
+          name={user.name}
+          username={user.username}
+          onLogout={handleLogout}
+        />
       </aside>
 
       {/* MAIN CONTENT AREA */}
-      <main className="main-area">
+      <main className="flex-1 flex flex-col h-full min-w-0 overflow-hidden">
         {/* HEADER NAVBAR */}
-        <header className="top-header">
-          <div className="header-title-group">
-            <h2 className="header-page-title">
+        <header className="h-13 min-h-13 flex items-center justify-between px-4 sm:px-6 border-b border-slate-800/80 bg-slate-950/60 backdrop-blur-md gap-3 flex-wrap">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              className="md:hidden text-slate-400 hover:text-white p-1 bg-transparent border-0 cursor-pointer"
+              onClick={() => setMobileMenuOpen(true)}
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <h2 className="text-sm font-semibold text-white m-0 whitespace-nowrap">
               {navItems.find((i) => i.key === view)?.label}
             </h2>
             {selectedRun && (
-              <Badge variant="outline">
+              <Badge variant="outline" className="hidden sm:inline-flex">
                 {selectedRun.keyword} • {selectedRun.location}
               </Badge>
             )}
           </div>
 
-          <div className="header-actions">
+          <div className="flex items-center gap-2 shrink-0">
             <Button
               variant="outline"
               size="sm"
@@ -384,24 +705,24 @@ function App(): React.JSX.Element {
                 })
               }
             >
-              <FolderOpen className="icon-sm" />
-              Folder Ekspor
+              <FolderOpen className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Folder Ekspor</span>
             </Button>
 
             <Button variant="default" size="sm" onClick={() => setView('scrape')}>
-              <Play className="icon-sm" />
-              Scrape Baru
+              <Play className="w-3.5 h-3.5" />
+              <span>Scrape Baru</span>
             </Button>
           </div>
         </header>
 
         {/* CONTENT BODY */}
-        <div className="content-body">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5 min-w-0">
           {isLoading ? (
             <Card>
-              <CardContent style={{ padding: '30px', textAlign: 'center', color: '#94a3b8' }}>
-                <RefreshCw className="icon-lg ui-spinner" style={{ margin: '0 auto 8px auto' }} />
-                <p>Memuat status aplikasi...</p>
+              <CardContent className="p-8 text-center text-slate-400 space-y-2">
+                <RefreshCw className="w-6 h-6 animate-spin mx-auto text-blue-500" />
+                <p className="text-xs">Memuat data aplikasi...</p>
               </CardContent>
             </Card>
           ) : (
@@ -409,121 +730,149 @@ function App(): React.JSX.Element {
               {/* DASHBOARD VIEW */}
               {view === 'dashboard' && (
                 <>
-                  <div className="metrics-grid">
-                    <Card>
-                      <CardContent className="metric-card-box">
-                        <div className="metric-card-top">
-                          <span className="metric-card-title">Total Run</span>
-                          <Database className="icon-md" style={{ color: '#60a5fa' }} />
+                  {/* METRICS CARDS */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <Card className="hover:border-slate-700 transition-colors">
+                      <CardContent className="p-4 space-y-2">
+                        <div className="flex items-center justify-between text-slate-400">
+                          <span className="text-xs font-medium">Total Run</span>
+                          <Database className="w-4 h-4 text-blue-400" />
                         </div>
-                        <div className="metric-card-value">{stats.totalRuns}</div>
-                        <span className="metric-card-sub">Total sesi scraping yang dibuat</span>
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-2xl font-bold text-white tracking-tight">{stats.totalRuns}</span>
+                          <span className="text-[11px] font-semibold text-emerald-400 flex items-center gap-0.5">
+                            <TrendingUp className="w-3 h-3" /> Akun Aktif
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-400 block">Total sesi scraping dibuat</span>
                       </CardContent>
                     </Card>
 
-                    <Card>
-                      <CardContent className="metric-card-box">
-                        <div className="metric-card-top">
-                          <span className="metric-card-title">Selesai</span>
-                          <CheckCircle2 className="icon-md" style={{ color: '#34d399' }} />
+                    <Card className="hover:border-slate-700 transition-colors">
+                      <CardContent className="p-4 space-y-2">
+                        <div className="flex items-center justify-between text-slate-400">
+                          <span className="text-xs font-medium">Sesi Selesai</span>
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                         </div>
-                        <div className="metric-card-value">{stats.completed}</div>
-                        <span className="metric-card-sub">Sesi scraping sukses</span>
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-2xl font-bold text-white tracking-tight">{stats.completed}</span>
+                          <span className="text-[11px] font-semibold text-emerald-400 flex items-center gap-0.5">
+                            <TrendingUp className="w-3 h-3" /> Sukses
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-400 block">Sesi scraping sukses</span>
                       </CardContent>
                     </Card>
 
-                    <Card>
-                      <CardContent className="metric-card-box">
-                        <div className="metric-card-top">
-                          <span className="metric-card-title">Total Bisnis</span>
-                          <Building2 className="icon-md" style={{ color: '#818cf8' }} />
+                    <Card className="hover:border-slate-700 transition-colors">
+                      <CardContent className="p-4 space-y-2">
+                        <div className="flex items-center justify-between text-slate-400">
+                          <span className="text-xs font-medium">Total Bisnis</span>
+                          <Building2 className="w-4 h-4 text-indigo-400" />
                         </div>
-                        <div className="metric-card-value">{stats.totalBusinesses}</div>
-                        <span className="metric-card-sub">Data kontak usaha terkumpul</span>
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-2xl font-bold text-white tracking-tight">{stats.totalBusinesses}</span>
+                          <span className="text-[11px] font-semibold text-blue-400 flex items-center gap-0.5">
+                            <Sparkle className="w-3 h-3" /> Data Terisolasi
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-400 block">Kontak tempat terkumpul</span>
                       </CardContent>
                     </Card>
 
-                    <Card>
-                      <CardContent className="metric-card-box">
-                        <div className="metric-card-top">
-                          <span className="metric-card-title">Rata-rata Rating</span>
-                          <Star className="icon-md" style={{ color: '#fbbf24' }} />
+                    <Card className="hover:border-slate-700 transition-colors">
+                      <CardContent className="p-4 space-y-2">
+                        <div className="flex items-center justify-between text-slate-400">
+                          <span className="text-xs font-medium">Rata-rata Rating</span>
+                          <Star className="w-4 h-4 text-amber-400 fill-amber-400" />
                         </div>
-                        <div className="metric-card-value">
-                          {Number.isFinite(stats.avgRating) ? stats.avgRating.toFixed(1) : '0.0'}
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-2xl font-bold text-white tracking-tight">
+                            {Number.isFinite(stats.avgRating) ? stats.avgRating.toFixed(1) : '0.0'}
+                          </span>
+                          <span className="text-[11px] font-semibold text-amber-400">★ High Score</span>
                         </div>
-                        <span className="metric-card-sub">Bintang ulasan tempat</span>
+                        <span className="text-[11px] text-slate-400 block">Bintang ulasan tempat</span>
                       </CardContent>
                     </Card>
                   </div>
 
-                  {/* ACTIVE PROGRESS CARD */}
-                  <Card>
-                    <CardHeader>
-                      <div className="flex-between">
-                        <div>
-                          <CardTitle>Status Scraping Aktif</CardTitle>
-                          <CardDescription>
-                            {progress
-                              ? `${progress.current} dari ${progress.total} tempat dikumpulkan`
-                              : 'Tidak ada proses scraping aktif saat ini'}
-                          </CardDescription>
+                  {/* 2 CHARTS ROW */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <Card>
+                      <CardHeader>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <CardTitle className="flex items-center gap-2">
+                              <TrendingUp className="w-4 h-4 text-blue-400" /> Tren Data Terkumpul
+                            </CardTitle>
+                            <CardDescription>Grafik progres hasil per sesi scraping</CardDescription>
+                          </div>
+                          <Badge variant="outline">Sesi Terakhir</Badge>
                         </div>
-                        <Badge variant={getBadgeVariant(activeStatus)}>{activeStatus.toUpperCase()}</Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <Progress value={progressPercent} />
-                      <div className="flex-between" style={{ fontSize: '12px', color: '#94a3b8' }}>
-                        <span>{progress?.message ?? 'Tekan "Scrape Baru" untuk memulai.'}</span>
-                        <span style={{ fontWeight: 600, color: '#f8fafc' }}>{progressPercent}%</span>
-                      </div>
-                    </CardContent>
-                  </Card>
+                      </CardHeader>
+                      <CardContent>
+                        <AreaChart data={areaChartData} />
+                      </CardContent>
+                    </Card>
 
-                  {/* RECENT HISTORY CARD */}
+                    <Card>
+                      <CardHeader>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <CardTitle className="flex items-center gap-2">
+                              <BarChart3 className="w-4 h-4 text-indigo-400" /> Distribusi Kategori Usaha
+                            </CardTitle>
+                            <CardDescription>Kategori tempat paling banyak terkumpul</CardDescription>
+                          </div>
+                          <Badge variant="outline">Top Kategori</Badge>
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        <BarChart data={barChartData} />
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* PREVIEW TABLE */}
                   <Card>
                     <CardHeader>
-                      <div className="flex-between">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
                         <div>
-                          <CardTitle>Riwayat Terbaru</CardTitle>
-                          <CardDescription>Sesi pencarian yang telah dijalankan sebelumnya</CardDescription>
+                          <CardTitle className="flex items-center gap-2">
+                            <Layers className="w-4 h-4 text-emerald-400" /> Cuplikan Data Usaha Terbaru
+                          </CardTitle>
+                          <CardDescription>Preview 5 kontak tempat yang baru saja dikumpulkan</CardDescription>
                         </div>
-                        <Button variant="ghost" size="sm" onClick={() => setView('history')}>
-                          Lihat Semua
+                        <Button variant="ghost" size="sm" onClick={() => setView('results')}>
+                          Buka Tabel Hasil &rarr;
                         </Button>
                       </div>
                     </CardHeader>
                     <CardContent>
-                      {runs.length === 0 ? (
-                        <p style={{ fontSize: '13px', color: '#94a3b8' }}>Belum ada riwayat pencarian.</p>
+                      {results.length === 0 ? (
+                        <p className="text-xs text-slate-400 text-center py-6">Belum ada data hasil scraping pada akun ini.</p>
                       ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                          {runs.slice(0, 5).map((run) => (
-                            <div
-                              key={run.id}
-                              className="history-card-item"
-                              style={{ cursor: 'pointer' }}
-                              onClick={() => {
-                                setSelectedRunId(run.id)
-                                setView('results')
-                              }}
-                            >
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                <div className="flex-gap-2">
-                                  <span style={{ fontWeight: 600, fontSize: '13px', color: '#f8fafc' }}>
-                                    {run.keyword}
-                                  </span>
-                                  <Badge variant="outline">{run.location}</Badge>
-                                </div>
-                                <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                                  {new Date(run.createdAt).toLocaleString('id-ID')} • {run.totalResults} hasil
-                                </span>
-                              </div>
-                              <Badge variant={getBadgeVariant(run.status)}>{run.status}</Badge>
-                            </div>
-                          ))}
-                        </div>
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Nama Tempat</TableHead>
+                              <TableHead>Kategori</TableHead>
+                              <TableHead>Telepon</TableHead>
+                              <TableHead>Rating</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {results.slice(0, 5).map((item) => (
+                              <TableRow key={item.id}>
+                                <TableCell className="font-semibold text-blue-400">{item.name}</TableCell>
+                                <TableCell>{item.category ? <Badge variant="outline">{item.category}</Badge> : '-'}</TableCell>
+                                <TableCell>{item.phone || '-'}</TableCell>
+                                <TableCell>{item.rating ? <span className="text-amber-400 font-semibold">★ {item.rating}</span> : '-'}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
                       )}
                     </CardContent>
                   </Card>
@@ -532,37 +881,37 @@ function App(): React.JSX.Element {
 
               {/* SCRAPE FORM VIEW */}
               {view === 'scrape' && (
-                <div className="grid-2col">
-                  <Card>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                  <Card className="lg:col-span-2">
                     <CardHeader>
                       <CardTitle>Form Scraping Baru</CardTitle>
                       <CardDescription>
                         Masukkan kata kunci dan lokasi target untuk mengambil data tempat dari Google Maps.
                       </CardDescription>
                     </CardHeader>
-                    <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                      <div className="form-field">
-                        <label className="form-label">Kata Kunci / Keyword</label>
+                    <CardContent className="space-y-4">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-slate-300">Kata Kunci / Keyword</label>
                         <Input
-                          icon={<Search className="icon-sm" />}
-                          placeholder="Contoh: Coffee Shop, Restoran, Bengkel"
+                          icon={<Search className="w-3.5 h-3.5" />}
+                          placeholder="Contoh: Coffee Shop, Restoran, Bengkel, Apotek"
                           value={form.keyword}
                           onChange={(e) => setForm((c) => ({ ...c, keyword: e.target.value }))}
                         />
                       </div>
 
-                      <div className="form-field">
-                        <label className="form-label">Lokasi / Kota Target</label>
-                        <Input
-                          icon={<MapPin className="icon-sm" />}
-                          placeholder="Contoh: Surabaya, Jakarta Selatan, Bandung"
+                      {/* TEXT (Autocomplete) REMOVED FROM LABEL AS REQUESTED */}
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-slate-300">Lokasi / Kota Target</label>
+                        <LocationAutocomplete
+                          icon={<MapPin className="w-3.5 h-3.5" />}
                           value={form.location}
-                          onChange={(e) => setForm((c) => ({ ...c, location: e.target.value }))}
+                          onChange={(val) => setForm((c) => ({ ...c, location: val }))}
                         />
                       </div>
 
-                      <div className="form-field">
-                        <label className="form-label">Maksimal Hasil Data</label>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-slate-300">Maksimal Hasil Data</label>
                         <Input
                           type="number"
                           min={1}
@@ -577,13 +926,13 @@ function App(): React.JSX.Element {
                         />
                       </div>
                     </CardContent>
-                    <CardFooter style={{ justifyContent: 'flex-start' }}>
+                    <CardFooter className="flex gap-2 justify-start flex-wrap">
                       <Button
                         variant="default"
                         disabled={isBusy || activeStatus === 'running'}
                         onClick={() => void startScrape()}
                       >
-                        <Play className="icon-sm" />
+                        <Play className="w-3.5 h-3.5" />
                         Mulai Scrape
                       </Button>
 
@@ -594,7 +943,7 @@ function App(): React.JSX.Element {
                           void runAction(() => window.api.pauseScrape(), 'Scrape Didepause')
                         }
                       >
-                        <Pause className="icon-sm" />
+                        <Pause className="w-3.5 h-3.5" />
                         Pause
                       </Button>
 
@@ -605,7 +954,7 @@ function App(): React.JSX.Element {
                           void runAction(() => window.api.resumeScrape(), 'Scrape Dilanjutkan')
                         }
                       >
-                        <Play className="icon-sm" />
+                        <Play className="w-3.5 h-3.5" />
                         Lanjutkan
                       </Button>
 
@@ -616,40 +965,57 @@ function App(): React.JSX.Element {
                           void runAction(() => window.api.stopScrape(), 'Scrape Dihentikan')
                         }
                       >
-                        <Square className="icon-sm" />
+                        <Square className="w-3.5 h-3.5" />
                         Stop
                       </Button>
                     </CardFooter>
                   </Card>
 
-                  {/* LIVE SCRAPE PROGRESS SIDEBAR */}
+                  {/* LIVE MONITORING WITH ESTIMATED TIME AND NAV BUTTON */}
                   <Card>
                     <CardHeader>
                       <CardTitle>Live Monitoring</CardTitle>
-                      <CardDescription>Progres saat ini</CardDescription>
+                      <CardDescription>Progres dan estimasi waktu scraping</CardDescription>
                     </CardHeader>
-                    <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                      <div className="flex-between" style={{ fontSize: '13px' }}>
-                        <span style={{ color: '#94a3b8' }}>Status</span>
+                    <CardContent className="space-y-4">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-slate-400">Status</span>
                         <Badge variant={getBadgeVariant(activeStatus)}>{activeStatus.toUpperCase()}</Badge>
                       </div>
 
-                      <div className="flex-between" style={{ fontSize: '13px' }}>
-                        <span style={{ color: '#94a3b8' }}>Terkumpul</span>
-                        <span style={{ fontWeight: 700, color: '#f8fafc' }}>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-slate-400">Terkumpul</span>
+                        <span className="font-bold text-slate-200">
                           {progress ? `${progress.current} / ${progress.total}` : '0 / 0'}
                         </span>
                       </div>
 
-                      <Progress value={progressPercent} />
-
-                      <div style={{ textAlign: 'center', paddingTop: '8px' }}>
-                        <span style={{ fontSize: '28px', fontWeight: 800, color: '#60a5fa' }}>{progressPercent}%</span>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-slate-400 flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5 text-blue-400" />
+                          Estimasi Waktu
+                        </span>
+                        <span className="font-bold text-blue-400">{estimatedTimeText}</span>
                       </div>
 
-                      <p style={{ fontSize: '12px', color: '#94a3b8', textAlign: 'center', margin: 0 }}>
+                      <Progress value={progressPercent} />
+
+                      <div className="text-center pt-1">
+                        <span className="text-3xl font-extrabold text-blue-400">{progressPercent}%</span>
+                      </div>
+
+                      <p className="text-xs text-slate-400 text-center m-0 leading-normal">
                         {progress?.message ?? 'Jendela browser Playwright akan terbuka otomatis saat scrape berjalan.'}
                       </p>
+
+                      <Button
+                        variant="default"
+                        className="w-full mt-2"
+                        onClick={() => setView('results')}
+                      >
+                        <TableIcon className="w-3.5 h-3.5" />
+                        Lihat Hasil Data
+                      </Button>
                     </CardContent>
                   </Card>
                 </div>
@@ -659,7 +1025,7 @@ function App(): React.JSX.Element {
               {view === 'results' && (
                 <Card>
                   <CardHeader>
-                    <div className="toolbar-container">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                       <div>
                         <CardTitle>Data Hasil Scraping</CardTitle>
                         <CardDescription>
@@ -670,8 +1036,8 @@ function App(): React.JSX.Element {
                       </div>
 
                       {/* TOOLBAR CONTROLS */}
-                      <div className="toolbar-group">
-                        <div style={{ width: '180px' }}>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="w-48">
                           <Select
                             value={selectedRunId}
                             onChange={(e) => setSelectedRunId(e.target.value)}
@@ -684,16 +1050,16 @@ function App(): React.JSX.Element {
                           </Select>
                         </div>
 
-                        <div style={{ width: '160px' }}>
+                        <div className="w-40">
                           <Input
-                            icon={<Search className="icon-sm" />}
+                            icon={<Search className="w-3.5 h-3.5" />}
                             placeholder="Cari..."
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
                           />
                         </div>
 
-                        <div style={{ width: '140px' }}>
+                        <div className="w-36">
                           <Select
                             value={sortKey}
                             onChange={(e) => setSortKey(e.target.value as SortKey)}
@@ -711,24 +1077,24 @@ function App(): React.JSX.Element {
                           title="Ubah Arah Urutan"
                           onClick={() => setSortDirection((c) => (c === 'asc' ? 'desc' : 'asc'))}
                         >
-                          <ArrowUpDown className="icon-sm" />
+                          <ArrowUpDown className="w-3.5 h-3.5" />
                         </Button>
                       </div>
                     </div>
                   </CardHeader>
 
-                  <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    {/* BATCH ACTION TOOLBAR */}
-                    <div className="flex-between">
-                      <div className="flex-gap-2">
-                        <Button variant="secondary" size="sm" onClick={() => void handleExport('csv')}>
-                          <Download className="icon-sm" />
-                          Export CSV
+                  <CardContent className="space-y-4">
+                    {/* EXPORT BUTTONS TEXT "(Pilih Folder)" REMOVED AS REQUESTED */}
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Button variant="secondary" size="sm" onClick={() => void handleExportSaveAs('csv')}>
+                          <Download className="w-3.5 h-3.5" />
+                          Simpan CSV
                         </Button>
 
-                        <Button variant="secondary" size="sm" onClick={() => void handleExport('xlsx')}>
-                          <Download className="icon-sm" />
-                          Export XLSX
+                        <Button variant="secondary" size="sm" onClick={() => void handleExportSaveAs('xlsx')}>
+                          <Download className="w-3.5 h-3.5" />
+                          Simpan XLSX
                         </Button>
 
                         <Button
@@ -743,7 +1109,7 @@ function App(): React.JSX.Element {
                             )
                           }
                         >
-                          <Sparkles className="icon-sm" style={{ color: '#fbbf24' }} />
+                          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
                           Deduplikasi
                         </Button>
 
@@ -759,7 +1125,7 @@ function App(): React.JSX.Element {
                               )
                             }
                           >
-                            <Trash2 className="icon-sm" />
+                            <Trash2 className="w-3.5 h-3.5" />
                             Hapus ({selectedIds.length})
                           </Button>
                         )}
@@ -773,114 +1139,114 @@ function App(): React.JSX.Element {
                     </div>
 
                     {/* RESULTS TABLE & DETAIL DRAWER GRID */}
-                    <div className="grid-2col">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead style={{ width: '40px' }}>
-                              <input
-                                type="checkbox"
-                                style={{ borderRadius: '4px', cursor: 'pointer' }}
-                                checked={
-                                  filteredResults.length > 0 &&
-                                  selectedIds.length === filteredResults.length
-                                }
-                                onChange={toggleSelectAll}
-                              />
-                            </TableHead>
-                            <TableHead>Nama Bisnis</TableHead>
-                            <TableHead>Kategori</TableHead>
-                            <TableHead>Rating</TableHead>
-                            <TableHead>Telepon</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {filteredResults.length === 0 ? (
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                      <div className="lg:col-span-2">
+                        <Table>
+                          <TableHeader>
                             <TableRow>
-                              <TableCell colSpan={5} style={{ textAlign: 'center', color: '#94a3b8', padding: '30px' }}>
-                                Tidak ada data hasil scraping yang cocok.
-                              </TableCell>
+                              <TableHead className="w-10">
+                                <input
+                                  type="checkbox"
+                                  className="rounded border-slate-700 bg-slate-950 cursor-pointer"
+                                  checked={
+                                    filteredResults.length > 0 &&
+                                    selectedIds.length === filteredResults.length
+                                  }
+                                  onChange={toggleSelectAll}
+                                />
+                              </TableHead>
+                              <TableHead>Nama Bisnis</TableHead>
+                              <TableHead>Kategori</TableHead>
+                              <TableHead>Rating</TableHead>
+                              <TableHead>Telepon</TableHead>
                             </TableRow>
-                          ) : (
-                            filteredResults.map((item) => (
-                              <TableRow
-                                key={item.id}
-                                className={detail?.id === item.id ? 'selected' : ''}
-                              >
-                                <TableCell>
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedIds.includes(item.id)}
-                                    onChange={() => toggleSelection(item.id)}
-                                  />
+                          </TableHeader>
+                          <TableBody>
+                            {filteredResults.length === 0 ? (
+                              <TableRow>
+                                <TableCell colSpan={5} className="text-center text-slate-400 py-8">
+                                  Tidak ada data hasil scraping yang cocok.
                                 </TableCell>
-                                <TableCell>
-                                  <button
-                                    className="table-btn-link"
-                                    onClick={() => setDetail(item)}
-                                    title={item.name}
-                                  >
-                                    {item.name}
-                                  </button>
-                                </TableCell>
-                                <TableCell>
-                                  {item.category ? (
-                                    <Badge variant="outline">{item.category}</Badge>
-                                  ) : (
-                                    '-'
-                                  )}
-                                </TableCell>
-                                <TableCell>
-                                  {item.rating ? (
-                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#fbbf24', fontWeight: 600 }}>
-                                      <Star className="icon-sm" style={{ fill: '#fbbf24' }} />
-                                      {item.rating}
-                                    </span>
-                                  ) : (
-                                    '-'
-                                  )}
-                                </TableCell>
-                                <TableCell>{item.phone || '-'}</TableCell>
                               </TableRow>
-                            ))
-                          )}
-                        </TableBody>
-                      </Table>
+                            ) : (
+                              filteredResults.map((item) => (
+                                <TableRow
+                                  key={item.id}
+                                  className={detail?.id === item.id ? 'bg-blue-500/10' : ''}
+                                >
+                                  <TableCell>
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedIds.includes(item.id)}
+                                      onChange={() => toggleSelection(item.id)}
+                                    />
+                                  </TableCell>
+                                  <TableCell>
+                                    <button
+                                      className="text-blue-400 hover:underline font-medium text-left cursor-pointer bg-transparent border-0 p-0 truncate max-w-[180px]"
+                                      onClick={() => setDetail(item)}
+                                      title={item.name}
+                                    >
+                                      {item.name}
+                                    </button>
+                                  </TableCell>
+                                  <TableCell>
+                                    {item.category ? (
+                                      <Badge variant="outline">{item.category}</Badge>
+                                    ) : (
+                                      '-'
+                                    )}
+                                  </TableCell>
+                                  <TableCell>
+                                    {item.rating ? (
+                                      <span className="flex items-center gap-1 text-amber-400 font-semibold">
+                                        <Star className="w-3.5 h-3.5 fill-amber-400" />
+                                        {item.rating}
+                                      </span>
+                                    ) : (
+                                      '-'
+                                    )}
+                                  </TableCell>
+                                  <TableCell>{item.phone || '-'}</TableCell>
+                                </TableRow>
+                              ))
+                            )}
+                          </TableBody>
+                        </Table>
+                      </div>
 
                       {/* DETAIL CARD DRAWER */}
-                      <Card className="sticky-inspect-card">
+                      <Card className="sticky top-0 h-fit">
                         <CardHeader>
-                          <CardTitle style={{ fontSize: '14px' }}>Detail Informasi</CardTitle>
+                          <CardTitle className="text-xs">Detail Informasi Tempat</CardTitle>
                         </CardHeader>
                         <CardContent>
                           {detail ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '12px' }}>
+                            <div className="space-y-3 text-xs">
                               <div>
-                                <h4 style={{ fontSize: '14px', fontWeight: 700, color: '#f8fafc', margin: 0 }}>
-                                  {detail.name}
-                                </h4>
-                                <p style={{ color: '#94a3b8', margin: '2px 0 0 0' }}>{detail.category || 'Tanpa Kategori'}</p>
+                                <h4 className="font-bold text-sm text-white m-0">{detail.name}</h4>
+                                <p className="text-slate-400 m-0 mt-0.5">{detail.category || 'Tanpa Kategori'}</p>
                               </div>
 
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', color: '#cbd5e1' }}>
-                                  <MapPin className="icon-sm" style={{ color: '#94a3b8', marginTop: '2px' }} />
+                              <div className="space-y-2 pt-2 border-t border-slate-800">
+                                <div className="flex items-start gap-2 text-slate-300">
+                                  <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
                                   <span>{detail.address || 'Alamat tidak tersedia'}</span>
                                 </div>
 
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#cbd5e1' }}>
-                                  <Phone className="icon-sm" style={{ color: '#94a3b8' }} />
+                                <div className="flex items-center gap-2 text-slate-300">
+                                  <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                                   <span>{detail.phone || 'Nomor HP tidak ada'}</span>
                                 </div>
 
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#cbd5e1' }}>
-                                  <Globe className="icon-sm" style={{ color: '#94a3b8' }} />
+                                <div className="flex items-center gap-2 text-slate-300">
+                                  <Globe className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                                   {detail.website ? (
                                     <a
                                       href={detail.website}
                                       target="_blank"
                                       rel="noreferrer"
-                                      style={{ color: '#60a5fa', wordBreak: 'break-all' }}
+                                      className="text-blue-400 hover:underline break-all"
                                     >
                                       {detail.website}
                                     </a>
@@ -890,46 +1256,33 @@ function App(): React.JSX.Element {
                                 </div>
                               </div>
 
-                              <div className="flex-between" style={{ paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                                <span style={{ color: '#94a3b8' }}>Rating & Ulasan</span>
-                                <span style={{ fontWeight: 600, color: '#f8fafc' }}>
+                              <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
+                                <span className="text-slate-400">Rating & Ulasan</span>
+                                <span className="font-semibold text-slate-100">
                                   ★ {detail.rating ?? '-'} ({detail.reviewCount ?? 0} ulasan)
                                 </span>
                               </div>
 
                               {detail.latitude && detail.longitude && (
-                                <div style={{ color: '#94a3b8' }}>
+                                <div className="text-slate-400 text-[11px]">
                                   Koordinat: {detail.latitude}, {detail.longitude}
                                 </div>
                               )}
 
-                              <div style={{ paddingTop: '10px' }}>
+                              <div className="pt-2">
                                 <a
                                   href={detail.mapsUrl}
                                   target="_blank"
                                   rel="noreferrer"
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '8px',
-                                    width: '100%',
-                                    padding: '8px 12px',
-                                    borderRadius: '6px',
-                                    backgroundColor: '#2563eb',
-                                    color: '#ffffff',
-                                    fontWeight: 500,
-                                    textDecoration: 'none',
-                                    fontSize: '12px'
-                                  }}
+                                  className="w-full inline-flex items-center justify-center gap-2 py-2 px-3 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs transition-colors no-underline"
                                 >
-                                  <ExternalLink className="icon-sm" />
+                                  <ExternalLink className="w-3.5 h-3.5" />
                                   Buka di Google Maps
                                 </a>
                               </div>
                             </div>
                           ) : (
-                            <p style={{ fontSize: '12px', color: '#94a3b8', textAlign: 'center', padding: '24px 0', margin: 0 }}>
+                            <p className="text-xs text-slate-400 text-center py-6 m-0">
                               Pilih salah satu baris di tabel untuk melihat rincian informasi bisnis.
                             </p>
                           )}
@@ -944,73 +1297,95 @@ function App(): React.JSX.Element {
               {view === 'history' && (
                 <Card>
                   <CardHeader>
-                    <div className="flex-between">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
                       <div>
-                        <CardTitle>Riwayat Pencarian</CardTitle>
-                        <CardDescription>Daftar semua sesi scraping yang telah tersimpan</CardDescription>
+                        <CardTitle>Riwayat Pencarian Scrape</CardTitle>
+                        <CardDescription>Daftar semua sesi scraping milik akun {user.email}</CardDescription>
                       </div>
                       <Button
                         variant="destructive"
                         size="sm"
                         onClick={() =>
                           void runAction(
-                            () => window.api.clearHistory(),
+                            () => window.api.clearHistory(user.email),
                             'Riwayat Dibersihkan',
-                            'Semua data riwayat dan hasil telah dihapus'
+                            'Semua data riwayat dan hasil akun Anda telah dihapus'
                           )
                         }
                       >
-                        <Trash2 className="icon-sm" />
+                        <Trash2 className="w-3.5 h-3.5" />
                         Hapus Semua Riwayat
                       </Button>
                     </div>
                   </CardHeader>
                   <CardContent>
                     {runs.length === 0 ? (
-                      <p style={{ fontSize: '13px', color: '#94a3b8', textAlign: 'center', padding: '30px 0' }}>
-                        Belum ada riwayat scraping.
-                      </p>
+                      <p className="text-xs text-slate-400 text-center py-8">Belum ada riwayat scraping untuk akun ini.</p>
                     ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {runs.map((run) => (
-                          <div key={run.id} className="history-card-item">
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                              <div className="flex-gap-2">
-                                <span style={{ fontWeight: 600, color: '#f8fafc', fontSize: '14px' }}>{run.keyword}</span>
-                                <Badge variant="outline">{run.location}</Badge>
+                          <div
+                            key={run.id}
+                            className="p-4 rounded-xl border border-slate-800 bg-slate-950/60 hover:border-slate-700 transition-all flex flex-col justify-between gap-3"
+                          >
+                            <div className="space-y-1.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-semibold text-slate-100 text-sm">{run.keyword}</span>
                                 <Badge variant={getBadgeVariant(run.status)}>{run.status}</Badge>
                               </div>
-                              <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                                Dibuat: {new Date(run.createdAt).toLocaleString('id-ID')} • Hasil:{' '}
-                                {run.totalResults} tempat
-                              </span>
+                              <div className="flex items-center gap-2 text-xs text-slate-400">
+                                <MapPin className="w-3.5 h-3.5" />
+                                <span>{run.location}</span>
+                              </div>
+                              <div className="text-[11px] text-slate-500">
+                                {new Date(run.createdAt).toLocaleString('id-ID')} • {run.totalResults} tempat terkumpul
+                              </div>
                             </div>
 
-                            <div className="flex-gap-2">
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={() => {
-                                  setSelectedRunId(run.id)
-                                  setView('results')
-                                }}
-                              >
-                                Lihat Data
-                              </Button>
+                            <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 gap-2 flex-wrap">
+                              <div className="flex gap-1.5">
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() => void handleExportSaveAs('csv')}
+                                >
+                                  CSV
+                                </Button>
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() => void handleExportSaveAs('xlsx')}
+                                >
+                                  XLSX
+                                </Button>
+                              </div>
 
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                onClick={() =>
-                                  void runAction(
-                                    () => window.api.deleteRun(run.id),
-                                    'Sesi Dihapus',
-                                    `Sesi ${run.keyword} dihapus`
-                                  )
-                                }
-                              >
-                                Hapus
-                              </Button>
+                              <div className="flex gap-1.5">
+                                <Button
+                                  variant="default"
+                                  size="sm"
+                                  onClick={() => {
+                                    setSelectedRunId(run.id)
+                                    setView('results')
+                                  }}
+                                >
+                                  Lihat Data
+                                </Button>
+
+                                <Button
+                                  variant="destructive"
+                                  size="sm"
+                                  onClick={() =>
+                                    void runAction(
+                                      () => window.api.deleteRun(run.id),
+                                      'Sesi Dihapus',
+                                      `Sesi ${run.keyword} dihapus`
+                                    )
+                                  }
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </Button>
+                              </div>
                             </div>
                           </div>
                         ))}
@@ -1020,15 +1395,15 @@ function App(): React.JSX.Element {
                 </Card>
               )}
 
-              {/* SETTINGS VIEW */}
+              {/* SETTINGS VIEW WITH ENHANCED INFORMASI SISTEM CARD */}
               {view === 'settings' && (
-                <div className="grid-2col">
-                  <Card>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                  <Card className="lg:col-span-2">
                     <CardHeader>
                       <CardTitle>Pengaturan Scraper</CardTitle>
-                      <CardDescription>Atur preferensi browser, jeda waktu, dan penyimpanan.</CardDescription>
+                      <CardDescription>Atur preferensi browser, jeda waktu, dan lokasi penyimpanan.</CardDescription>
                     </CardHeader>
-                    <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                    <CardContent className="space-y-5">
                       <Switch
                         label="Mode Headless Browser"
                         description="Jalankan Playwright Chromium di latar belakang tanpa membuka jendela tampilan visual."
@@ -1038,8 +1413,8 @@ function App(): React.JSX.Element {
                         }
                       />
 
-                      <div className="form-field">
-                        <label className="form-label">
+                      <div className="space-y-1">
+                        <label className="text-xs font-semibold text-slate-300">
                           Jeda Antar Halaman / Delay (milidetik)
                         </label>
                         <Input
@@ -1052,13 +1427,13 @@ function App(): React.JSX.Element {
                             }))
                           }
                         />
-                        <span className="form-hint">
+                        <span className="text-[11px] text-slate-400">
                           Waktu tunggu sebelum mengambil detail tempat berikutnya (default: 1200ms).
                         </span>
                       </div>
 
-                      <div className="form-field">
-                        <label className="form-label">
+                      <div className="space-y-1">
+                        <label className="text-xs font-semibold text-slate-300">
                           Waktu Batas / Timeout (milidetik)
                         </label>
                         <Input
@@ -1091,19 +1466,24 @@ function App(): React.JSX.Element {
                         }
                       />
 
-                      <div className="form-field">
-                        <label className="form-label">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-slate-300">
                           Folder Lokasi Ekspor File
                         </label>
-                        <Input
-                          value={settings.exportDirectory}
-                          onChange={(e) =>
-                            setSettings((c) => ({ ...c, exportDirectory: e.target.value }))
-                          }
-                        />
+                        <div className="flex gap-2">
+                          <Input
+                            value={settings.exportDirectory}
+                            onChange={(e) =>
+                              setSettings((c) => ({ ...c, exportDirectory: e.target.value }))
+                            }
+                          />
+                          <Button variant="secondary" onClick={() => void handleSelectDirectory()}>
+                            Pilih Folder...
+                          </Button>
+                        </div>
                       </div>
                     </CardContent>
-                    <CardFooter style={{ justifyContent: 'flex-start' }}>
+                    <CardFooter className="flex gap-2 justify-start">
                       <Button
                         variant="default"
                         onClick={() =>
@@ -1131,20 +1511,54 @@ function App(): React.JSX.Element {
                     </CardFooter>
                   </Card>
 
-                  <Card>
+                  {/* INFORMASI SISTEM CARD REDESIGNED FOR HIGH VISUAL QUALITY */}
+                  <Card className="lg:col-span-1">
                     <CardHeader>
-                      <CardTitle>Informasi Sistem</CardTitle>
+                      <CardTitle className="flex items-center gap-2">
+                        <Cpu className="w-4 h-4 text-blue-400" /> Informasi System
+                      </CardTitle>
+                      <CardDescription>Spesifikasi engine & status penyimpanan</CardDescription>
                     </CardHeader>
-                    <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '12px', color: '#94a3b8' }}>
-                      <p style={{ margin: 0 }}>
-                        <strong style={{ color: '#f8fafc' }}>Penyimpanan Database:</strong> SQLite lokal di folder `userData` Electron.
-                      </p>
-                      <p style={{ margin: 0 }}>
-                        <strong style={{ color: '#f8fafc' }}>Format Ekspor:</strong> CSV (UTF-8) & Spreadsheet Excel (XLSX).
-                      </p>
-                      <p style={{ margin: 0 }}>
-                        <strong style={{ color: '#f8fafc' }}>Engine Scraping:</strong> Playwright Chromium Automation Engine.
-                      </p>
+                    <CardContent className="space-y-3">
+                      <div className="p-3 rounded-lg border border-slate-800 bg-slate-950/60 space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-slate-400 flex items-center gap-1.5 font-medium">
+                            <Database className="w-3.5 h-3.5 text-blue-400" /> Database
+                          </span>
+                          <Badge variant="success">WAL Mode</Badge>
+                        </div>
+                        <p className="text-[11px] text-slate-300 font-semibold m-0">SQLite Internal (userData)</p>
+                      </div>
+
+                      <div className="p-3 rounded-lg border border-slate-800 bg-slate-950/60 space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-slate-400 flex items-center gap-1.5 font-medium">
+                            <Cpu className="w-3.5 h-3.5 text-indigo-400" /> Engine
+                          </span>
+                          <Badge variant="info">Automated</Badge>
+                        </div>
+                        <p className="text-[11px] text-slate-300 font-semibold m-0">Playwright Chromium</p>
+                      </div>
+
+                      <div className="p-3 rounded-lg border border-slate-800 bg-slate-950/60 space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-slate-400 flex items-center gap-1.5 font-medium">
+                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Keamanan Data
+                          </span>
+                          <Badge variant="outline">Isolated</Badge>
+                        </div>
+                        <p className="text-[11px] text-slate-300 font-semibold m-0">Multi-User Encapsulated</p>
+                      </div>
+
+                      <div className="p-3 rounded-lg border border-slate-800 bg-slate-950/60 space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-slate-400 flex items-center gap-1.5 font-medium">
+                            <Download className="w-3.5 h-3.5 text-amber-400" /> Format Ekspor
+                          </span>
+                          <Badge variant="secondary">CSV / XLSX</Badge>
+                        </div>
+                        <p className="text-[11px] text-slate-300 font-semibold m-0">UTF-8 Encoded Spreadsheets</p>
+                      </div>
                     </CardContent>
                   </Card>
                 </div>

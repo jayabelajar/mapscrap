@@ -170,6 +170,26 @@ async function collectPlaceUrls(
   return Array.from(urls).slice(0, maxResults)
 }
 
+function cleanPhone(raw: string): string {
+  if (!raw) return ''
+  // Strip non-printable unicode, glyphs, and special icon characters
+  let text = raw.replace(/[\uE000-\uF8FF\u200B-\u200D\uFEFF\u202D\u202C\u200E\u200F]/g, '')
+  text = text.replace(/[^\d+()\s-]/g, '').trim()
+  text = text.replace(/\s+/g, ' ')
+  // Basic validation: must contain at least 5 digits
+  const digitCount = (text.match(/\d/g) || []).length
+  return digitCount >= 5 ? text : ''
+}
+
+function cleanAddress(raw: string): string {
+  if (!raw) return ''
+  let text = raw.replace(/[\uE000-\uF8FF\u200B-\u200D\uFEFF]/g, '')
+  // Strip Google Maps Plus Codes at start (e.g., "7QGV+5W ")
+  text = text.replace(/^[A-Z0-9]{4,8}\+[A-Z0-9]{2,4}\s*,?\s*/i, '')
+  text = text.replace(/^[📍\s]+/, '').trim()
+  return text
+}
+
 async function scrapePlace(
   page: Page,
   url: string
@@ -187,27 +207,41 @@ async function scrapePlace(
     (await textContent(page, 'button[jsaction*="category"]')) ||
     (await textContent(page, 'span.DkA2fd'))
 
-  const address =
+  const rawAddress =
     (await textContent(page, 'button[data-item-id="address"]')) ||
-    (await textContent(page, 'div[data-item-id="address"]'))
+    (await textContent(page, 'div[data-item-id="address"]')) ||
+    (await attribute(page, 'button[data-item-id="address"]', 'aria-label'))
 
-  const phone =
+  const rawPhone =
     (await textContent(page, 'button[data-item-id^="phone"]')) ||
-    (await textContent(page, 'div[data-item-id^="phone"]'))
+    (await textContent(page, 'div[data-item-id^="phone"]')) ||
+    (await attribute(page, 'button[data-item-id^="phone"]', 'aria-label'))
 
   const website =
     (await attribute(page, 'a[data-item-id="authority"]', 'href')) ||
     (await attribute(page, 'a[aria-label*="website"]', 'href'))
 
-  const ratingText =
-    (await textContent(page, 'div[role="main"] span[role="img"]')) ||
+  // Enhanced rating extractors
+  let ratingText =
+    (await textContent(page, 'div.F7v250')) ||
     (await textContent(page, 'span.ceNzKf')) ||
-    (await attribute(page, 'span[role="img"][aria-label*="star"]', 'aria-label'))
+    (await textContent(page, 'div[role="main"] span[role="img"]')) ||
+    (await attribute(page, 'span[role="img"][aria-label*="star"]', 'aria-label')) ||
+    (await attribute(page, 'span[role="img"][aria-label*="bintang"]', 'aria-label'))
+
+  if (!ratingText) {
+    // Try inner text from rating buttons/divs
+    const firstRatingLoc = page.locator('div[role="main"] span[aria-hidden="true"]').first()
+    if ((await firstRatingLoc.count()) > 0) {
+      ratingText = (await firstRatingLoc.textContent()) || ''
+    }
+  }
 
   const reviewText =
     (await textContent(page, 'button[jsaction*="pane.reviewChart.moreReviews"]')) ||
     (await textContent(page, 'button[jsaction*="reviews"]')) ||
-    (await textContent(page, 'span[aria-label*="reviews"]'))
+    (await textContent(page, 'span[aria-label*="reviews"]')) ||
+    (await textContent(page, 'span[aria-label*="ulasan"]'))
 
   const { latitude, longitude } = parseCoordinateFromUrl(page.url())
 
@@ -217,18 +251,21 @@ async function scrapePlace(
   let parsedRating: number | null = null
   if (ratingMatch) {
     const normalizedRating = parseFloat(ratingMatch[1].replace(',', '.'))
-    if (!isNaN(normalizedRating) && normalizedRating <= 5) {
+    if (!isNaN(normalizedRating) && normalizedRating >= 1.0 && normalizedRating <= 5.0) {
       parsedRating = normalizedRating
     }
   }
 
+  const phone = cleanPhone(rawPhone)
+  const address = cleanAddress(rawAddress)
+
   return {
     runId: '',
     name: name || 'Tanpa Nama',
-    category,
+    category: category || '',
     address,
     phone,
-    website,
+    website: website || '',
     rating: parsedRating,
     reviewCount: reviewMatch ? Number(reviewMatch) : null,
     mapsUrl: page.url(),

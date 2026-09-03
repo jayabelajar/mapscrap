@@ -12,7 +12,7 @@ import type {
 type Listener<T> = (payload: T) => void
 
 interface AppApi {
-  getSnapshot: () => Promise<DashboardSnapshot>
+  getSnapshot: (userEmail?: string) => Promise<DashboardSnapshot>
   startScrape: (form: ScrapeFormData) => Promise<{ id: string }>
   pauseScrape: () => Promise<boolean>
   resumeScrape: () => Promise<boolean>
@@ -20,12 +20,14 @@ interface AppApi {
   saveSettings: (settings: Partial<SettingsData>) => Promise<SettingsData>
   resetSettings: () => Promise<SettingsData>
   openExportDirectory: () => Promise<string>
+  selectDirectory: () => Promise<string | null>
   listResults: (query: ResultsQuery) => Promise<BusinessRecord[]>
   deleteResults: (ids: string[]) => Promise<boolean>
   deduplicateRun: (runId: string) => Promise<number>
   deleteRun: (runId: string) => Promise<boolean>
-  clearHistory: () => Promise<boolean>
+  clearHistory: (userEmail?: string) => Promise<boolean>
   exportResults: (payload: ExportPayload) => Promise<string>
+  exportResultsSaveAs: (payload: ExportPayload) => Promise<string | null>
   onProgress: (listener: Listener<ScrapeProgressPayload>) => () => void
   onResult: (listener: Listener<BusinessRecord>) => () => void
 }

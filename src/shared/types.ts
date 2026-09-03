@@ -4,6 +4,7 @@ export interface ScrapeFormData {
   keyword: string
   location: string
   maxResults: number
+  userEmail?: string
 }
 
 export interface SettingsData {
@@ -33,6 +34,7 @@ export interface BusinessRecord {
 
 export interface ScrapeRunRecord {
   id: string
+  userEmail?: string
   keyword: string
   location: string
   status: RunStatus
@@ -67,4 +69,6 @@ export interface ExportPayload {
 export interface ResultsQuery {
   runId?: string
   search?: string
+  userEmail?: string
 }
+
