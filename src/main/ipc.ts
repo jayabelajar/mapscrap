@@ -64,11 +64,14 @@ export class IpcController {
   }
 
   private getSnapshot(): DashboardSnapshot {
+    const latestRun = this.database.listRuns()[0] ?? null
+    const selectedRunId = this.activeJob?.run.id ?? latestRun?.id
+
     return {
       settings: this.settings.get(),
       activeRun: this.activeJob?.run ?? null,
       runs: this.database.listRuns(),
-      results: this.database.listBusinesses(this.activeJob ? { runId: this.activeJob.run.id } : {}),
+      results: selectedRunId ? this.database.listBusinesses({ runId: selectedRunId }) : [],
       progress: this.progress
     }
   }
@@ -83,22 +86,35 @@ export class IpcController {
       throw new Error('A scrape job is already active')
     }
 
-    const run = this.database.createRun(form.keyword, form.location, form.maxResults)
+    const keyword = form.keyword.trim()
+    const location = form.location.trim()
+    const maxResults = Math.max(1, Math.min(500, Math.floor(form.maxResults || 0)))
+
+    if (!keyword) {
+      throw new Error('Keyword wajib diisi')
+    }
+
+    if (!location) {
+      throw new Error('Location wajib diisi')
+    }
+
+    const run = this.database.createRun(keyword, location, maxResults)
     const control = { paused: false, stopped: false }
-    this.activeJob = { run, form, control }
+    const normalizedForm = { keyword, location, maxResults }
+    this.activeJob = { run, form: normalizedForm, control }
 
     this.emitProgress({
       runId: run.id,
       status: 'running',
       current: 0,
-      total: form.maxResults,
+      total: maxResults,
       message: 'Initializing scraper'
     })
 
     const settings = this.settings.get()
 
     void this.scraper
-      .run(this.mainWindow, run.id, form, settings, control, {
+      .run(this.mainWindow, run.id, normalizedForm, settings, control, {
         onProgress: (payload) => this.emitProgress(payload),
         onBatch: (records) => {
           const inserted = this.database.insertBusinesses(records)
@@ -119,6 +135,9 @@ export class IpcController {
         }
       })
       .then(() => {
+        if (settings.autoDeduplicate) {
+          this.database.deduplicateRun(run.id)
+        }
         const status = control.stopped ? 'stopped' : 'completed'
         const total = this.database.countBusinesses(run.id)
         this.database.updateRunStatus(run.id, status, total)
@@ -126,19 +145,21 @@ export class IpcController {
           runId: run.id,
           status,
           current: total,
-          total: form.maxResults,
+          total: maxResults,
           message: status === 'completed' ? 'Scrape completed' : 'Scrape stopped'
         })
       })
       .catch((error: Error) => {
+        const failedStatus =
+          control.stopped && error.message === 'Scrape stopped' ? 'stopped' : 'failed'
         const total = this.database.countBusinesses(run.id)
-        this.database.updateRunStatus(run.id, 'failed', total)
+        this.database.updateRunStatus(run.id, failedStatus, total)
         this.emitProgress({
           runId: run.id,
-          status: 'failed',
+          status: failedStatus,
           current: total,
-          total: form.maxResults,
-          message: error.message
+          total: maxResults,
+          message: failedStatus === 'stopped' ? 'Scrape stopped' : error.message
         })
       })
       .finally(() => {
@@ -204,6 +225,9 @@ export class IpcController {
   private exportResults(payload: ExportPayload): string {
     const all = this.database.listBusinesses({ runId: payload.runId })
     const records = payload.ids?.length ? all.filter((item) => payload.ids?.includes(item.id)) : all
+    if (records.length === 0) {
+      throw new Error('Tidak ada data untuk diekspor')
+    }
     const run = this.database.getRun(payload.runId)
     const label = run
       ? `${run.keyword}-${run.location}-${new Date(run.createdAt).toISOString().slice(0, 10)}`

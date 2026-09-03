@@ -18,6 +18,27 @@ type ScrapeHandlers = {
   onBatch: (records: Omit<BusinessRecord, 'id' | 'scrapedAt'>[]) => void
 }
 
+function toUserFacingError(error: unknown): Error {
+  if (error instanceof Error) {
+    if (error.message.includes("Executable doesn't exist")) {
+      return new Error(
+        'Chromium Playwright belum terpasang. Jalankan: npx playwright install chromium'
+      )
+    }
+
+    if (
+      error.message.includes('Target page, context or browser has been closed') ||
+      error.message.includes('Browser closed')
+    ) {
+      return new Error('Scrape stopped')
+    }
+
+    return error
+  }
+
+  return new Error('Unknown scraper error')
+}
+
 function parseCoordinateFromUrl(url: string): {
   latitude: number | null
   longitude: number | null
@@ -139,52 +160,57 @@ export class GoogleMapsScraper {
     control: JobControl,
     handlers: ScrapeHandlers
   ): Promise<void> {
-    this.browser = await chromium.launch({ headless: settings.headless })
-    const page = await this.browser.newPage()
-    page.setDefaultTimeout(settings.timeoutMs)
+    try {
+      this.browser = await chromium.launch({ headless: settings.headless })
+      const page = await this.browser.newPage()
+      page.setDefaultTimeout(settings.timeoutMs)
 
-    const query = encodeURIComponent(`${form.keyword} ${form.location}`)
-    handlers.onProgress({
-      runId,
-      status: 'running',
-      current: 0,
-      total: form.maxResults,
-      message: 'Opening Google Maps'
-    })
-
-    await page.goto(`https://www.google.com/maps/search/${query}`, {
-      waitUntil: 'domcontentloaded',
-      timeout: settings.timeoutMs
-    })
-    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => undefined)
-
-    const urls = await collectPlaceUrls(page, form.maxResults, control)
-    const detailPage = await this.browser.newPage()
-    detailPage.setDefaultTimeout(settings.timeoutMs)
-
-    for (let index = 0; index < urls.length; index += 1) {
-      if (control.stopped) {
-        break
-      }
-
-      await waitWhilePaused(control)
-      const raw = await scrapePlace(detailPage, urls[index])
-      const record = { ...raw, runId }
-      handlers.onBatch([record])
+      const query = encodeURIComponent(`${form.keyword} ${form.location}`)
       handlers.onProgress({
         runId,
-        status: control.paused ? 'paused' : 'running',
-        current: index + 1,
+        status: 'running',
+        current: 0,
         total: form.maxResults,
-        message: `Collected ${index + 1} of ${form.maxResults}`
+        message: 'Opening Google Maps'
       })
-      mainWindow.webContents.send('scrape:result', record)
-      await sleep(settings.delayMs)
-    }
 
-    await detailPage.close()
-    await page.close()
-    await this.close()
+      await page.goto(`https://www.google.com/maps/search/${query}`, {
+        waitUntil: 'domcontentloaded',
+        timeout: settings.timeoutMs
+      })
+      await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => undefined)
+
+      const urls = await collectPlaceUrls(page, form.maxResults, control)
+      const detailPage = await this.browser.newPage()
+      detailPage.setDefaultTimeout(settings.timeoutMs)
+
+      for (let index = 0; index < urls.length; index += 1) {
+        if (control.stopped) {
+          break
+        }
+
+        await waitWhilePaused(control)
+        const raw = await scrapePlace(detailPage, urls[index])
+        const record = { ...raw, runId }
+        handlers.onBatch([record])
+        handlers.onProgress({
+          runId,
+          status: control.paused ? 'paused' : 'running',
+          current: index + 1,
+          total: form.maxResults,
+          message: `Collected ${index + 1} of ${form.maxResults}`
+        })
+        mainWindow.webContents.send('scrape:result', record)
+        await sleep(settings.delayMs)
+      }
+
+      await detailPage.close()
+      await page.close()
+    } catch (error) {
+      throw toUserFacingError(error)
+    } finally {
+      await this.close()
+    }
   }
 
   async close(): Promise<void> {
