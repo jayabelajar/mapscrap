@@ -23,10 +23,14 @@ const api = {
   openExportDirectory: () => ipcRenderer.invoke('settings:openExportDirectory'),
   selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
   listResults: (query: ResultsQuery) => ipcRenderer.invoke('results:list', query),
-  deleteResults: (ids: string[]) => ipcRenderer.invoke('results:delete', ids),
-  restoreResults: (records: BusinessRecord[]) => ipcRenderer.invoke('results:restore', records),
-  deduplicateRun: (runId: string) => ipcRenderer.invoke('results:deduplicate', runId),
-  deleteRun: (runId: string) => ipcRenderer.invoke('history:delete', runId),
+  deleteResults: (ids: string[], userEmail?: string) =>
+    ipcRenderer.invoke('results:delete', { ids, userEmail }),
+  restoreResults: (records: BusinessRecord[], userEmail?: string) =>
+    ipcRenderer.invoke('results:restore', { records, userEmail }),
+  deduplicateRun: (runId: string, userEmail?: string) =>
+    ipcRenderer.invoke('results:deduplicate', { runId, userEmail }),
+  deleteRun: (runId: string, userEmail?: string) =>
+    ipcRenderer.invoke('history:delete', { runId, userEmail }),
   restoreRun: (payload: RunBundlePayload) => ipcRenderer.invoke('history:restoreRun', payload),
   clearHistory: (userEmail?: string) => ipcRenderer.invoke('history:clear', userEmail),
   restoreHistorySnapshot: (payload: HistoryRestorePayload) =>

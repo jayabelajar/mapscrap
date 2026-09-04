@@ -24,10 +24,10 @@ interface AppApi {
   openExportDirectory: () => Promise<string>
   selectDirectory: () => Promise<string | null>
   listResults: (query: ResultsQuery) => Promise<BusinessRecord[]>
-  deleteResults: (ids: string[]) => Promise<boolean>
-  restoreResults: (records: BusinessRecord[]) => Promise<boolean>
-  deduplicateRun: (runId: string) => Promise<number>
-  deleteRun: (runId: string) => Promise<boolean>
+  deleteResults: (ids: string[], userEmail?: string) => Promise<boolean>
+  restoreResults: (records: BusinessRecord[], userEmail?: string) => Promise<boolean>
+  deduplicateRun: (runId: string, userEmail?: string) => Promise<number>
+  deleteRun: (runId: string, userEmail?: string) => Promise<boolean>
   restoreRun: (payload: RunBundlePayload) => Promise<boolean>
   clearHistory: (userEmail?: string) => Promise<boolean>
   restoreHistorySnapshot: (payload: HistoryRestorePayload) => Promise<boolean>

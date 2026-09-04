@@ -22,7 +22,7 @@ function toUserFacingError(error: unknown): Error {
   if (error instanceof Error) {
     if (error.message.includes("Executable doesn't exist")) {
       return new Error(
-        'Chromium Playwright belum terpasang. Jalankan: npx playwright install chromium'
+        'Browser scraping belum siap dipakai. Jalankan `npx playwright install chromium`, lalu coba lagi.'
       )
     }
 
@@ -30,13 +30,25 @@ function toUserFacingError(error: unknown): Error {
       error.message.includes('Target page, context or browser has been closed') ||
       error.message.includes('Browser closed')
     ) {
-      return new Error('Scrape stopped')
+      return new Error('Proses scraping dihentikan.')
+    }
+
+    if (error.message.includes('net::ERR_INTERNET_DISCONNECTED')) {
+      return new Error('Koneksi internet terputus. Periksa jaringan lalu coba lagi.')
+    }
+
+    if (error.message.includes('net::ERR_NAME_NOT_RESOLVED')) {
+      return new Error('Google Maps tidak bisa dijangkau saat ini. Coba lagi beberapa saat lagi.')
+    }
+
+    if (error.message.includes('Timeout') || error.message.includes('timed out')) {
+      return new Error('Proses terlalu lama merespons. Coba ulang atau naikkan timeout di pengaturan.')
     }
 
     return error
   }
 
-  return new Error('Unknown scraper error')
+  return new Error('Terjadi kendala saat menjalankan scraping.')
 }
 
 function parseCoordinateFromUrl(url: string): {

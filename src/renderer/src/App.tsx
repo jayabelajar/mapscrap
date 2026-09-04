@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import locationOptionsSource from './data/kota-kabupaten.json'
+import citiesSource from './data/cities.json'
+import provincesSource from './data/provinces.json'
 import {
   LayoutDashboard,
   Play,
@@ -38,7 +39,11 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   AlertTriangle,
-  RotateCcw
+  RotateCcw,
+  Eye,
+  EyeOff,
+  Upload,
+  PanelsTopLeft
 } from 'lucide-react'
 
 import type {
@@ -88,6 +93,18 @@ type UserProfile = {
   avatarUrl?: string
 }
 
+type CitySourceItem = {
+  id: number
+  province_id: number
+  name: string
+  type: string
+}
+
+type ProvinceSourceItem = {
+  id: number
+  name: string
+}
+
 const defaultSettings: SettingsData = {
   headless: true,
   delayMs: 500,
@@ -98,11 +115,12 @@ const defaultSettings: SettingsData = {
 }
 
 const navItems: Array<{ key: ViewKey; label: string; icon: React.ReactNode }> = [
-  { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
-  { key: 'scrape', label: 'Scrape', icon: <Play className="w-4 h-4" /> },
-  { key: 'results', label: 'Hasil Data', icon: <TableIcon className="w-4 h-4" /> },
-  { key: 'history', label: 'Riwayat', icon: <HistoryIcon className="w-4 h-4" /> },
-  { key: 'settings', label: 'Pengaturan', icon: <SettingsIcon className="w-4 h-4" /> }
+  { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" /> },
+  { key: 'scrape', label: 'Scrape', icon: <Play className="w-5 h-5" /> },
+  { key: 'results', label: 'Hasil Data', icon: <TableIcon className="w-5 h-5" /> },
+  { key: 'history', label: 'Riwayat', icon: <HistoryIcon className="w-5 h-5" /> },
+  { key: 'settings', label: 'Pengaturan', icon: <SettingsIcon className="w-5 h-5" /> },
+  { key: 'profile', label: 'Profil', icon: <User className="w-5 h-5" /> }
 ]
 
 type ConfirmDialogState = {
@@ -123,6 +141,70 @@ type ProgressLogItem = {
   status: RunStatus
   message: string
   timestamp: string
+}
+
+const ACTIVE_USER_STORAGE_KEY = 'mapscraper_user'
+const ACCOUNTS_STORAGE_KEY = 'mapscraper_accounts'
+
+function getDefaultUser(): UserProfile {
+  return {
+    name: 'Alex Scraper',
+    username: '@alex.scraper',
+    email: 'alex@mapscraper.com',
+    password: '',
+    avatarUrl: ''
+  }
+}
+
+function loadStoredAccounts(): UserProfile[] {
+  const raw = localStorage.getItem(ACCOUNTS_STORAGE_KEY)
+  if (!raw) {
+    return []
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as UserProfile[]
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => typeof item?.email === 'string' && item.email.trim())
+      : []
+  } catch {
+    return []
+  }
+}
+
+function toFriendlyErrorMessage(error: unknown): string {
+  const rawMessage = error instanceof Error ? error.message : String(error || 'Terjadi kendala')
+  const normalized = rawMessage.trim()
+
+  if (!normalized) {
+    return 'Terjadi kendala. Silakan coba lagi.'
+  }
+
+  if (normalized === 'Scrape stopped') {
+    return 'Proses scraping dihentikan.'
+  }
+
+  if (normalized.includes('net::ERR_INTERNET_DISCONNECTED')) {
+    return 'Koneksi internet terputus. Periksa jaringan lalu coba lagi.'
+  }
+
+  if (normalized.includes('ERR_NAME_NOT_RESOLVED')) {
+    return 'Alamat tujuan tidak bisa dijangkau. Coba lagi beberapa saat lagi.'
+  }
+
+  if (normalized.includes('timed out') || normalized.includes('Timeout')) {
+    return 'Proses melebihi batas waktu. Coba ulang atau naikkan timeout di pengaturan.'
+  }
+
+  if (normalized.includes('Target page, context or browser has been closed')) {
+    return 'Jendela scraping tertutup sebelum proses selesai.'
+  }
+
+  if (normalized.includes('Executable doesn\'t exist')) {
+    return 'Mesin browser scraping belum siap. Pasang Chromium Playwright lalu coba lagi.'
+  }
+
+  return normalized
 }
 
 function formatDuration(totalSeconds: number): string {
@@ -154,21 +236,25 @@ function matchesGlobalSearch(searchText: string, values: Array<string | number |
 }
 
 const locationOptions = Array.from(
-  new Set(
-    (locationOptionsSource as string[])
-      .map((item) => item.trim())
-      .filter(Boolean)
-  )
+  new Set([
+    ...(provincesSource as ProvinceSourceItem[]).map((item) => item.name.trim()),
+    ...(citiesSource as CitySourceItem[]).map((item) => {
+      const province = (provincesSource as ProvinceSourceItem[]).find((entry) => entry.id === item.province_id)
+      const placeType = item.type?.trim() || 'Daerah'
+      return `${placeType} ${item.name.trim()}${province ? `, ${province.name.trim()}` : ''}`.trim()
+    })
+  ].filter(Boolean))
 ).sort((left, right) => left.localeCompare(right, 'id'))
 
 function App(): React.JSX.Element {
   // Auth State & Persistence
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
-    return Boolean(localStorage.getItem('mapscraper_user'))
+    return Boolean(localStorage.getItem(ACTIVE_USER_STORAGE_KEY))
   })
   const [authScreen, setAuthScreen] = useState<'login' | 'register'>('login')
+  const [storedAccounts, setStoredAccounts] = useState<UserProfile[]>(() => loadStoredAccounts())
   const [user, setUser] = useState<UserProfile>(() => {
-    const saved = localStorage.getItem('mapscraper_user')
+    const saved = localStorage.getItem(ACTIVE_USER_STORAGE_KEY)
     if (saved) {
       try {
         return JSON.parse(saved) as UserProfile
@@ -176,16 +262,11 @@ function App(): React.JSX.Element {
         // fallback
       }
     }
-    return {
-      name: 'Alex Scraper',
-      username: '@alex.scraper',
-      email: 'alex@mapscraper.com',
-      password: ''
-    }
+    return getDefaultUser()
   })
   const [authForm, setAuthForm] = useState({ email: '', password: '', name: '' })
   const [profileForm, setProfileForm] = useState<UserProfile>(() => {
-    const saved = localStorage.getItem('mapscraper_user')
+    const saved = localStorage.getItem(ACTIVE_USER_STORAGE_KEY)
     if (saved) {
       try {
         return JSON.parse(saved) as UserProfile
@@ -193,13 +274,7 @@ function App(): React.JSX.Element {
         // fallback
       }
     }
-    return {
-      name: 'Alex Scraper',
-      username: '@alex.scraper',
-      email: 'alex@mapscraper.com',
-      password: '',
-      avatarUrl: ''
-    }
+    return getDefaultUser()
   })
 
   // Layout & Navigation State
@@ -230,6 +305,7 @@ function App(): React.JSX.Element {
   const [progressLog, setProgressLog] = useState<ProgressLogItem[]>([])
   const [timeTick, setTimeTick] = useState(() => Date.now())
   const [searchOpen, setSearchOpen] = useState(false)
+  const [showProfilePassword, setShowProfilePassword] = useState(false)
 
   const addToast = useCallback(
     (
@@ -251,10 +327,16 @@ function App(): React.JSX.Element {
   )
 
   const persistUser = useCallback((nextUser: UserProfile) => {
-    localStorage.setItem('mapscraper_user', JSON.stringify(nextUser))
+    localStorage.setItem(ACTIVE_USER_STORAGE_KEY, JSON.stringify(nextUser))
+    const nextAccounts = [
+      nextUser,
+      ...storedAccounts.filter((account) => account.email.toLowerCase() !== nextUser.email.toLowerCase())
+    ]
+    localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(nextAccounts))
+    setStoredAccounts(nextAccounts)
     setUser(nextUser)
     setProfileForm(nextUser)
-  }, [])
+  }, [storedAccounts])
 
   const pushProgressLog = useCallback((status: RunStatus, message: string) => {
     if (!message) return
@@ -273,17 +355,27 @@ function App(): React.JSX.Element {
           timestamp: new Date().toISOString()
         },
         ...current
-      ].slice(0, 5)
+      ].slice(0, 10)
     })
   }, [])
 
   const showException = useCallback(
     (title: string, error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error || 'Operasi gagal')
+      const message = toFriendlyErrorMessage(error)
       setErrorDialog({ title, message })
       addToast({ title, description: message, type: 'error' })
     },
     [addToast]
+  )
+
+  const accessibleRunIds = useMemo(
+    () =>
+      new Set([
+        ...runs.map((run) => run.id),
+        ...(activeRun?.id ? [activeRun.id] : []),
+        ...(selectedRunId ? [selectedRunId] : [])
+      ]),
+    [activeRun?.id, runs, selectedRunId]
   )
 
   const applySnapshot = useCallback((snapshot: DashboardSnapshot): void => {
@@ -321,6 +413,10 @@ function App(): React.JSX.Element {
     })
 
     const offProgress = window.api.onProgress((payload) => {
+      if (!accessibleRunIds.has(payload.runId)) {
+        return
+      }
+
       setProgress(payload)
       if (payload.status === 'running') {
         setScrapeStartTime((current) => current ?? Date.now())
@@ -331,8 +427,8 @@ function App(): React.JSX.Element {
       pushProgressLog(payload.status, payload.message)
       if (payload.status === 'failed') {
         setErrorDialog({
-          title: 'Terjadi error saat scrape',
-          message: payload.message || 'Proses scrape gagal.'
+          title: 'Scraping belum berhasil',
+          message: toFriendlyErrorMessage(payload.message || 'Proses scraping gagal.')
         })
       }
       setRuns((current) =>
@@ -360,6 +456,10 @@ function App(): React.JSX.Element {
     })
 
     const offResult = window.api.onResult((record) => {
+      if (!accessibleRunIds.has(record.runId)) {
+        return
+      }
+
       setSelectedRunId(record.runId)
       setResults((current) => [record, ...current])
       setRuns((current) =>
@@ -376,7 +476,7 @@ function App(): React.JSX.Element {
       offProgress()
       offResult()
     }
-  }, [isLoggedIn, user.email, applySnapshot, pushProgressLog])
+  }, [accessibleRunIds, isLoggedIn, user.email, applySnapshot, pushProgressLog])
 
   useEffect(() => {
     if (!selectedRunId || !user.email) return
@@ -418,6 +518,17 @@ function App(): React.JSX.Element {
 
     return suggestions
   }, [results, search])
+
+  const menuSuggestions = useMemo(() => {
+    const text = search.trim().toLowerCase()
+    if (!text) {
+      return []
+    }
+
+    return navItems
+      .filter((item) => item.key !== view && item.label.toLowerCase().includes(text))
+      .slice(0, 4)
+  }, [search, view])
 
   const filteredRuns = useMemo(() => runs, [runs])
 
@@ -553,8 +664,8 @@ function App(): React.JSX.Element {
   }
 
   const resetScrapeForm = (): void => {
-    setForm({ keyword: 'Cafe', location: 'Surabaya, Jawa Timur', maxResults: 20 })
-    addToast('Form direset', 'Parameter scrape kembali ke nilai awal', 'info')
+    setForm({ keyword: '', location: '', maxResults: 1 })
+    addToast('Form direset', 'Semua isian form scraping sudah dikosongkan.', 'info')
   }
 
   const handleProfileAvatarChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
@@ -569,11 +680,21 @@ function App(): React.JSX.Element {
   }
 
   const handleProfileSave = (): void => {
+    const normalizedEmail = profileForm.email.trim().toLowerCase() || user.email
+    const emailTaken = storedAccounts.some(
+      (account) => account.email.toLowerCase() === normalizedEmail && account.email.toLowerCase() !== user.email.toLowerCase()
+    )
+
+    if (emailTaken) {
+      addToast('Email sudah dipakai', 'Gunakan email lain karena email ini sudah terdaftar pada akun berbeda.', 'warning')
+      return
+    }
+
     const sanitized: UserProfile = {
       ...profileForm,
       name: profileForm.name.trim() || user.name,
       username: profileForm.username.trim() || user.username,
-      email: profileForm.email.trim().toLowerCase() || user.email,
+      email: normalizedEmail,
       password: profileForm.password ?? '',
       avatarUrl: profileForm.avatarUrl ?? ''
     }
@@ -592,7 +713,8 @@ function App(): React.JSX.Element {
       const exportedPath = await window.api.exportResultsSaveAs({
         runId,
         ids: ids ?? (runId === selectedRunId && selectedIds.length > 0 ? selectedIds : undefined),
-        format
+        format,
+        userEmail: user.email
       })
       if (exportedPath) {
         addToast(`Ekspor ${format.toUpperCase()} Berhasil`, `Disimpan ke: ${exportedPath}`, 'success')
@@ -624,7 +746,7 @@ function App(): React.JSX.Element {
   const deleteSelectedResults = async (): Promise<void> => {
     const backup = results.filter((item) => selectedIds.includes(item.id))
     await runAction(async () => {
-      await window.api.deleteResults(selectedIds)
+      await window.api.deleteResults(selectedIds, user.email)
       setSelectedIds([])
       setDetail((current) => (current && selectedIds.includes(current.id) ? null : current))
       addToast({
@@ -634,7 +756,7 @@ function App(): React.JSX.Element {
         actionLabel: 'Undo',
         onAction: () =>
           void runAction(
-            () => window.api.restoreResults(backup),
+            () => window.api.restoreResults(backup, user.email),
             'Penghapusan dibatalkan',
             `${backup.length} baris dipulihkan`
           )
@@ -649,7 +771,7 @@ function App(): React.JSX.Element {
     }
 
     await runAction(async () => {
-      await window.api.deleteRun(run.id)
+      await window.api.deleteRun(run.id, user.email)
       if (selectedRunId === run.id) {
         setSelectedRunId('')
         setDetail(null)
@@ -661,7 +783,7 @@ function App(): React.JSX.Element {
         actionLabel: 'Undo',
         onAction: () =>
           void runAction(
-            () => window.api.restoreRun(backup),
+            () => window.api.restoreRun({ ...backup, userEmail: user.email }),
             'Penghapusan dibatalkan',
             `Sesi ${run.keyword} dipulihkan`
           )
@@ -688,7 +810,7 @@ function App(): React.JSX.Element {
         actionLabel: 'Undo',
         onAction: () =>
           void runAction(
-            () => window.api.restoreHistorySnapshot(backup),
+            () => window.api.restoreHistorySnapshot({ ...backup, userEmail: user.email }),
             'Riwayat dipulihkan',
             `${backup.runs.length} sesi berhasil dikembalikan`
           )
@@ -715,17 +837,23 @@ function App(): React.JSX.Element {
       addToast('Email Wajib Diisi', 'Silakan masukkan email Anda', 'warning')
       return
     }
-    const name = authForm.name || authForm.email.split('@')[0]
-    const userData = {
-      name: name.charAt(0).toUpperCase() + name.slice(1),
-      username: `@${name.toLowerCase().replace(/\s+/g, '')}`,
-      email: authForm.email.toLowerCase(),
-      password: authForm.password,
-      avatarUrl: ''
+    const normalizedEmail = authForm.email.trim().toLowerCase()
+    const existingAccount = storedAccounts.find((account) => account.email.toLowerCase() === normalizedEmail)
+
+    if (!existingAccount) {
+      addToast('Akun belum terdaftar', 'Email ini belum pernah dibuat. Silakan daftar terlebih dahulu.', 'warning')
+      return
     }
-    persistUser(userData)
+
+    if ((existingAccount.password ?? '') !== authForm.password) {
+      addToast('Password tidak cocok', 'Periksa kembali kata sandi akun yang dipilih.', 'warning')
+      return
+    }
+
+    persistUser(existingAccount)
     setIsLoggedIn(true)
-    addToast('Selamat Datang!', `Berhasil masuk sebagai ${userData.name}`, 'success')
+    setAuthForm({ email: '', password: '', name: '' })
+    addToast('Selamat datang', `Berhasil masuk sebagai ${existingAccount.name}`, 'success')
   }
 
   const handleAuthRegisterSubmit = (e: React.FormEvent) => {
@@ -734,32 +862,39 @@ function App(): React.JSX.Element {
       addToast('Email Wajib Diisi', 'Silakan masukkan email Anda', 'warning')
       return
     }
-    const name = authForm.name || authForm.email.split('@')[0]
+    const normalizedEmail = authForm.email.trim().toLowerCase()
+    if (storedAccounts.some((account) => account.email.toLowerCase() === normalizedEmail)) {
+      addToast('Akun sudah ada', 'Email ini sudah terdaftar. Silakan masuk menggunakan akun yang ada.', 'warning')
+      return
+    }
+
+    const name = authForm.name || normalizedEmail.split('@')[0]
     const userData = {
       name: name.charAt(0).toUpperCase() + name.slice(1),
       username: `@${name.toLowerCase().replace(/\s+/g, '')}`,
-      email: authForm.email.toLowerCase(),
+      email: normalizedEmail,
       password: authForm.password,
       avatarUrl: ''
     }
     persistUser(userData)
     setIsLoggedIn(true)
-    addToast('Pendaftaran Sukses', `Akun ${userData.name} berhasil dibuat!`, 'success')
+    setAuthForm({ email: '', password: '', name: '' })
+    addToast('Pendaftaran sukses', `Akun ${userData.name} berhasil dibuat.`, 'success')
   }
 
   const handleLogout = () => {
-    localStorage.removeItem('mapscraper_user')
+    localStorage.removeItem(ACTIVE_USER_STORAGE_KEY)
     setIsLoggedIn(false)
     setAuthScreen('login')
     setRuns([])
     setResults([])
-    setProfileForm({
-      name: 'Alex Scraper',
-      username: '@alex.scraper',
-      email: 'alex@mapscraper.com',
-      password: '',
-      avatarUrl: ''
-    })
+    setActiveRun(null)
+    setProgress(null)
+    setSelectedRunId('')
+    setSelectedIds([])
+    setProfileForm(getDefaultUser())
+    setUser(getDefaultUser())
+    setAuthForm({ email: '', password: '', name: '' })
     addToast('Sampai Jumpa', 'Anda telah keluar akun', 'info')
   }
 
@@ -788,25 +923,42 @@ function App(): React.JSX.Element {
   if (!isLoggedIn) {
     return (
       <div className="fixed inset-0 z-[9999] bg-[#090d16] text-slate-100 flex items-center justify-center p-4 select-none overflow-y-auto">
-        <div className="w-full max-w-md space-y-6 my-auto">
-          <div className="text-center space-y-2">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white flex items-center justify-center mx-auto shadow-2xl shadow-blue-500/20">
-              <Bot className="w-7 h-7" />
-            </div>
-            <h1 className="text-2xl font-extrabold tracking-tight text-white m-0">GmapScraper</h1>
-            <p className="text-xs text-slate-400 m-0">Bot pengumpul data Google Maps yang cepat dan rapi</p>
-          </div>
-
+        <div className="w-full max-w-md my-auto">
           {authScreen === 'login' ? (
-            /* DEDICATED LOGIN SCREEN */
             <Card className="border-slate-800 bg-slate-900/90 shadow-2xl">
               <CardHeader className="text-center pb-2">
-                <CardTitle className="text-base font-bold">Masuk Ke Akun Anda</CardTitle>
-                <CardDescription className="text-xs">
-                  Silakan masukkan email dan kata sandi Anda untuk melanjutkan
-                </CardDescription>
+                <CardTitle className="text-base font-bold">Masuk ke akun</CardTitle>
+                <CardDescription className="text-xs">Gunakan akun yang sudah tersimpan atau masukkan email dan kata sandi.</CardDescription>
               </CardHeader>
               <CardContent className="pt-2">
+                {storedAccounts.length > 0 && (
+                  <div className="mb-4 space-y-2 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                    <div className="text-[11px] font-semibold text-slate-300">Akun tersimpan</div>
+                    <div className="space-y-2">
+                      {storedAccounts.map((account) => (
+                        <button
+                          key={account.email}
+                          type="button"
+                          className="flex w-full items-center justify-between rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2 text-left hover:bg-slate-800"
+                          onClick={() =>
+                            setAuthForm({
+                              email: account.email,
+                              password: account.password ?? '',
+                              name: account.name
+                            })
+                          }
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-semibold text-slate-100">{account.name}</div>
+                            <div className="truncate text-[11px] text-slate-400">{account.email}</div>
+                          </div>
+                          <span className="text-[11px] font-medium text-blue-400">Pilih</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <form onSubmit={handleAuthLoginSubmit} className="space-y-4">
                   <div className="space-y-1">
                     <label className="text-[11px] font-semibold text-slate-300">Email Pengguna</label>
@@ -833,7 +985,7 @@ function App(): React.JSX.Element {
                   </div>
 
                   <Button type="submit" className="w-full mt-3">
-                    Masuk Ke Aplikasi &rarr;
+                    Masuk
                   </Button>
                 </form>
 
@@ -850,13 +1002,10 @@ function App(): React.JSX.Element {
               </CardContent>
             </Card>
           ) : (
-            /* DEDICATED REGISTER SCREEN */
             <Card className="border-slate-800 bg-slate-900/90 shadow-2xl">
               <CardHeader className="text-center pb-2">
-                <CardTitle className="text-base font-bold">Pendaftaran Akun Baru</CardTitle>
-                <CardDescription className="text-xs">
-                  Buat akun baru untuk mulai melakukan ekstraksi data
-                </CardDescription>
+                <CardTitle className="text-base font-bold">Daftar akun baru</CardTitle>
+                <CardDescription className="text-xs">Buat akun lokal baru untuk menyimpan data scraping secara terpisah.</CardDescription>
               </CardHeader>
               <CardContent className="pt-2">
                 <form onSubmit={handleAuthRegisterSubmit} className="space-y-4">
@@ -897,7 +1046,7 @@ function App(): React.JSX.Element {
                   </div>
 
                   <Button type="submit" className="w-full mt-3">
-                    Buat Akun Sekarang &rarr;
+                    Buat akun
                   </Button>
                 </form>
 
@@ -933,17 +1082,21 @@ function App(): React.JSX.Element {
       {/* SIDEBAR */}
       <aside
         className={`fixed md:relative inset-y-0 left-0 z-50 h-full flex flex-col bg-[#060911] border-r border-slate-800/80 p-3.5 shrink-0 transition-all duration-200 ease-in-out ${
-          sidebarCollapsed ? 'md:w-[84px] md:min-w-[84px]' : 'md:w-60 md:min-w-60'
+          sidebarCollapsed ? 'md:w-[96px] md:min-w-[96px]' : 'md:w-64 md:min-w-64'
         } ${mobileMenuOpen ? 'translate-x-0 w-60 min-w-60' : '-translate-x-full md:translate-x-0'}`}
       >
         <div className="flex items-center justify-between pb-3 border-b border-slate-800/60 px-1">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white flex items-center justify-center shadow-lg shadow-blue-500/20 shrink-0">
-              <Bot className="w-5 h-5" />
+            <div
+              className={`rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white flex items-center justify-center shadow-lg shadow-blue-500/20 shrink-0 transition-all ${
+                sidebarCollapsed ? 'w-9 h-9' : 'w-11 h-11'
+              }`}
+            >
+              <Bot className={`${sidebarCollapsed ? 'w-5 h-5' : 'w-6 h-6'}`} />
             </div>
             {!sidebarCollapsed && (
               <div className="flex flex-col min-w-0">
-                <h1 className="text-sm font-bold tracking-tight text-white m-0 leading-tight">GmapScraper</h1>
+                <h1 className="text-base font-bold tracking-tight text-white m-0 leading-tight">GmapScraper</h1>
                 <p className="text-[11px] text-slate-400 m-0">Google Maps Scraper</p>
               </div>
             )}
@@ -960,7 +1113,7 @@ function App(): React.JSX.Element {
           {navItems.map((item) => (
             <button
               key={item.key}
-              className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors border border-transparent cursor-pointer ${
+              className={`flex items-center justify-between gap-2 px-3 py-3 rounded-lg text-sm font-medium transition-colors border border-transparent cursor-pointer ${
                 view === item.key
                   ? 'bg-slate-800/90 text-white border-slate-700 shadow-sm'
                   : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/50'
@@ -970,7 +1123,7 @@ function App(): React.JSX.Element {
                 setMobileMenuOpen(false)
               }}
             >
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-3">
                 {item.icon}
                 {!sidebarCollapsed && <span>{item.label}</span>}
               </div>
@@ -1051,8 +1204,13 @@ function App(): React.JSX.Element {
                 onFocus={() => setSearchOpen(true)}
                 onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
               />
-              {searchOpen && searchSuggestions.length > 0 && (
+              {searchOpen && (searchSuggestions.length > 0 || menuSuggestions.length > 0) && (
                 <div className="absolute left-0 right-0 top-11 z-50 overflow-hidden rounded-xl border border-slate-800 bg-slate-950 shadow-2xl">
+                  {searchSuggestions.length > 0 && (
+                    <div className="border-b border-slate-800/80 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Data
+                    </div>
+                  )}
                   {searchSuggestions.map((item) => (
                     <button
                       key={item.id}
@@ -1074,6 +1232,28 @@ function App(): React.JSX.Element {
                         <div className="truncate text-[11px] text-slate-400">{item.description}</div>
                       </div>
                       <span className="shrink-0 text-[10px] font-medium text-blue-400">Buka</span>
+                    </button>
+                  ))}
+                  {menuSuggestions.length > 0 && (
+                    <div className="border-t border-slate-800/80 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Shortcut Menu
+                    </div>
+                  )}
+                  {menuSuggestions.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      className="flex w-full items-center justify-between gap-3 border-0 border-b border-slate-800/70 bg-transparent px-3 py-2.5 text-left last:border-b-0 hover:bg-slate-900"
+                      onMouseDown={() => {
+                        setView(item.key)
+                        setSearchOpen(false)
+                      }}
+                    >
+                      <div className="flex items-center gap-3 text-xs font-semibold text-slate-100">
+                        {item.icon}
+                        <span>{item.label}</span>
+                      </div>
+                      <PanelsTopLeft className="h-3.5 w-3.5 text-blue-400" />
                     </button>
                   ))}
                 </div>
@@ -1279,59 +1459,45 @@ function App(): React.JSX.Element {
                         </CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-4">
-                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-semibold text-slate-300">Kata Kunci</label>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-300">Kata Kunci</label>
                             <Input
                               icon={<Search className="w-3.5 h-3.5" />}
                               placeholder="Contoh: Coffee Shop"
                               value={form.keyword}
                               onChange={(e) => setForm((c) => ({ ...c, keyword: e.target.value }))}
                             />
-                          </div>
+                    </div>
 
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-semibold text-slate-300">Lokasi Target</label>
-                            <LocationAutocomplete
-                              icon={<MapPin className="w-3.5 h-3.5" />}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-300">Maksimal Hasil</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={500}
+                        value={form.maxResults}
+                        onChange={(e) =>
+                          setForm((c) => ({
+                            ...c,
+                            maxResults: Math.max(1, Math.min(500, Number(e.target.value) || 1))
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-300">Lokasi Target</label>
+                      <LocationAutocomplete
+                        icon={<MapPin className="w-3.5 h-3.5" />}
                               value={form.location}
                               options={locationOptions}
-                              onChange={(val) => setForm((c) => ({ ...c, location: val }))}
-                            />
-                          </div>
-
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-semibold text-slate-300">Maksimal Hasil</label>
-                            <Input
-                              type="number"
-                              min={1}
-                              max={500}
-                              value={form.maxResults}
-                              onChange={(e) =>
-                                setForm((c) => ({
-                                  ...c,
-                                  maxResults: Math.max(1, Math.min(500, Number(e.target.value) || 1))
-                                }))
-                              }
-                            />
-                          </div>
-
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-semibold text-slate-300">Mode Browser</label>
-                            <Select
-                              value={settings.headless ? 'headless' : 'visible'}
-                              onChange={(e) =>
-                                setSettings((current) => ({
-                                  ...current,
-                                  headless: e.target.value === 'headless'
-                                }))
-                              }
-                            >
-                              <option value="headless">Headless</option>
-                              <option value="visible">Tampil Browser</option>
-                            </Select>
-                          </div>
-                        </div>
+                          onChange={(val) => setForm((c) => ({ ...c, location: val }))}
+                      />
+                    </div>
+                  </div>
                       </CardContent>
                       <CardFooter className="flex gap-2 justify-start flex-wrap">
                         <Button
@@ -1347,7 +1513,7 @@ function App(): React.JSX.Element {
                           variant="outline"
                           disabled={activeStatus !== 'running'}
                           onClick={() =>
-                            void runAction(() => window.api.pauseScrape(), 'Scrape Didepause')
+                            void runAction(() => window.api.pauseScrape(), 'Scrape dijeda')
                           }
                         >
                           <Pause className="w-3.5 h-3.5" />
@@ -1376,7 +1542,7 @@ function App(): React.JSX.Element {
                           Stop
                         </Button>
 
-                        <Button variant="ghost" onClick={resetScrapeForm}>
+                        <Button variant="outline" onClick={resetScrapeForm}>
                           <RotateCcw className="w-3.5 h-3.5" />
                           Reset
                         </Button>
@@ -1401,7 +1567,7 @@ function App(): React.JSX.Element {
                             Belum ada data untuk ditampilkan.
                           </p>
                         ) : (
-                          <div className="max-h-[320px] overflow-auto">
+                          <div className="max-h-[260px] overflow-auto">
                             <Table>
                               <TableHeader>
                                 <TableRow>
@@ -1471,7 +1637,7 @@ function App(): React.JSX.Element {
 
                       <div className="min-h-0 flex-1 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
                         <div className="mb-3 text-[11px] font-semibold text-slate-300">Perubahan status</div>
-                        <div className="space-y-2 overflow-auto max-h-[calc(100vh-28rem)] pr-1">
+                        <div className="space-y-2 overflow-auto max-h-[178px] pr-1">
                           {progressLog.length === 0 ? (
                             <p className="m-0 text-[11px] text-slate-400">
                               Status scrape akan tampil di sini setiap ada perubahan.
@@ -1496,7 +1662,9 @@ function App(): React.JSX.Element {
                       </div>
 
                       <p className="m-0 text-center text-xs leading-normal text-slate-400">
-                        {progress?.message ?? 'Jendela browser Playwright akan terbuka otomatis saat scrape berjalan.'}
+                        {toFriendlyErrorMessage(
+                          progress?.message ?? 'Proses scraping akan berjalan otomatis sesuai pengaturan yang dipilih.'
+                        )}
                       </p>
                     </CardContent>
                   </Card>
@@ -1575,7 +1743,7 @@ function App(): React.JSX.Element {
                           disabled={!selectedRunId}
                           onClick={() =>
                             void runAction(
-                              () => window.api.deduplicateRun(selectedRunId),
+                              () => window.api.deduplicateRun(selectedRunId, user.email),
                               'Deduplikasi Selesai',
                               'Data duplikat telah dibersihkan'
                             )
@@ -1790,7 +1958,16 @@ function App(): React.JSX.Element {
                         </div>
                         <label className="w-full">
                           <span className="mb-1 block text-xs font-semibold text-slate-300">Avatar</span>
-                          <Input type="file" accept="image/*" onChange={handleProfileAvatarChange} />
+                          <div className="flex items-center gap-2">
+                            <label className="inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-xs font-medium text-slate-100 hover:bg-slate-800">
+                              <Upload className="h-3.5 w-3.5" />
+                              <span>Choose File</span>
+                              <input type="file" accept="image/*" className="hidden" onChange={handleProfileAvatarChange} />
+                            </label>
+                            <span className="truncate text-[11px] text-slate-400">
+                              {profileForm.avatarUrl ? 'Avatar dipilih' : 'Belum ada file dipilih'}
+                            </span>
+                          </div>
                         </label>
                       </div>
                     </CardContent>
@@ -1830,11 +2007,22 @@ function App(): React.JSX.Element {
 
                         <div className="space-y-1.5">
                           <label className="text-xs font-semibold text-slate-300">Password</label>
-                          <Input
-                            type="password"
-                            value={profileForm.password}
-                            onChange={(e) => setProfileForm((current) => ({ ...current, password: e.target.value }))}
-                          />
+                          <div className="relative">
+                            <Input
+                              type={showProfilePassword ? 'text' : 'password'}
+                              className="pr-10"
+                              value={profileForm.password}
+                              onChange={(e) => setProfileForm((current) => ({ ...current, password: e.target.value }))}
+                            />
+                            <button
+                              type="button"
+                              className="absolute right-3 top-1/2 -translate-y-1/2 border-0 bg-transparent p-0 text-slate-400 hover:text-slate-100"
+                              onClick={() => setShowProfilePassword((current) => !current)}
+                              title={showProfilePassword ? 'Sembunyikan password' : 'Tampilkan password'}
+                            >
+                              {showProfilePassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </CardContent>
@@ -2171,7 +2359,7 @@ function App(): React.JSX.Element {
                 <AlertTriangle className="h-4 w-4" />
                 {errorDialog.title}
               </CardTitle>
-              <CardDescription>Detail error ditampilkan supaya lebih mudah dicek.</CardDescription>
+              <CardDescription>Kami tampilkan penjelasan singkat supaya lebih mudah dipahami.</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-3 text-xs leading-6 text-slate-200">

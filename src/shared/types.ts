@@ -64,16 +64,19 @@ export interface ExportPayload {
   runId: string
   ids?: string[]
   format: 'csv' | 'xlsx'
+  userEmail?: string
 }
 
 export interface RunBundlePayload {
   run: ScrapeRunRecord
   results: BusinessRecord[]
+  userEmail?: string
 }
 
 export interface HistoryRestorePayload {
   runs: ScrapeRunRecord[]
   results: BusinessRecord[]
+  userEmail?: string
 }
 
 export interface ResultsQuery {

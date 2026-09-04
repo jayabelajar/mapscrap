@@ -185,6 +185,19 @@ export class DatabaseService {
     return row ? mapRun(row) : null
   }
 
+  getRunForUser(runId: string, userEmail?: string): ScrapeRunRecord | null {
+    const run = this.getRun(runId)
+    if (!run) {
+      return null
+    }
+
+    if (userEmail && run.userEmail !== userEmail) {
+      return null
+    }
+
+    return run
+  }
+
   listRuns(userEmail?: string): ScrapeRunRecord[] {
     let rows: RunRow[]
     if (userEmail) {
@@ -275,16 +288,24 @@ export class DatabaseService {
     return rows.map(mapBusiness)
   }
 
-  deleteBusinesses(ids: string[]): void {
+  deleteBusinesses(ids: string[], userEmail?: string): void {
     const affectedRunIds = new Set<string>()
-    const selectStmt = this.db.prepare(`SELECT run_id FROM businesses WHERE id = ?`)
+    const selectStmt = userEmail
+      ? this.db.prepare(
+          `SELECT b.run_id FROM businesses b
+           JOIN runs r ON b.run_id = r.id
+           WHERE b.id = ? AND r.user_email = ?`
+        )
+      : this.db.prepare(`SELECT run_id FROM businesses WHERE id = ?`)
     const stmt = this.db.prepare(`DELETE FROM businesses WHERE id = ?`)
     for (const id of ids) {
-      const row = selectStmt.get(id) as { run_id: string } | undefined
+      const row = (userEmail
+        ? selectStmt.get(id, userEmail)
+        : selectStmt.get(id)) as { run_id: string } | undefined
       if (row?.run_id) {
         affectedRunIds.add(row.run_id)
+        stmt.run(id)
       }
-      stmt.run(id)
     }
 
     for (const runId of affectedRunIds) {
@@ -295,7 +316,7 @@ export class DatabaseService {
     }
   }
 
-  restoreBusinesses(records: BusinessRecord[]): void {
+  restoreBusinesses(records: BusinessRecord[], userEmail?: string): void {
     const affectedRunIds = new Set<string>()
     const stmt = this.db.prepare(
       `
@@ -307,6 +328,10 @@ export class DatabaseService {
     )
 
     for (const record of records) {
+      const run = this.getRunForUser(record.runId, userEmail)
+      if (!run) {
+        continue
+      }
       affectedRunIds.add(record.runId)
       stmt.run(
         record.id,
@@ -333,12 +358,18 @@ export class DatabaseService {
     }
   }
 
-  deleteRun(runId: string): void {
+  deleteRun(runId: string, userEmail?: string): void {
+    if (!this.getRunForUser(runId, userEmail)) {
+      return
+    }
     this.db.prepare(`DELETE FROM businesses WHERE run_id = ?`).run(runId)
     this.db.prepare(`DELETE FROM runs WHERE id = ?`).run(runId)
   }
 
-  restoreRun(run: ScrapeRunRecord): void {
+  restoreRun(run: ScrapeRunRecord, userEmail?: string): void {
+    if (userEmail && run.userEmail !== userEmail) {
+      return
+    }
     this.db
       .prepare(
         `
@@ -360,7 +391,11 @@ export class DatabaseService {
       )
   }
 
-  deduplicateRun(runId: string): number {
+  deduplicateRun(runId: string, userEmail?: string): number {
+    if (!this.getRunForUser(runId, userEmail)) {
+      return 0
+    }
+
     const duplicates = this.db
       .prepare(
         `

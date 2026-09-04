@@ -56,23 +56,30 @@ export class IpcController {
       return result.filePaths[0]
     })
     ipcMain.handle('results:list', (_, query: ResultsQuery) => this.database.listBusinesses(query))
-    ipcMain.handle('results:delete', (_, ids: string[]) => {
-      this.database.deleteBusinesses(ids)
+    ipcMain.handle('results:delete', (_, payload: { ids: string[]; userEmail?: string }) => {
+      this.database.deleteBusinesses(payload.ids, payload.userEmail)
       return true
     })
-    ipcMain.handle('results:restore', (_, records) => {
-      this.database.restoreBusinesses(records)
-      return true
+    ipcMain.handle(
+      'results:restore',
+      (_, payload: { records: HistoryRestorePayload['results']; userEmail?: string }) => {
+        this.database.restoreBusinesses(payload.records, payload.userEmail)
+        return true
+      }
+    )
+    ipcMain.handle('results:deduplicate', (_, payload: { runId: string; userEmail?: string }) => {
+      return this.database.deduplicateRun(payload.runId, payload.userEmail)
     })
-    ipcMain.handle('results:deduplicate', (_, runId: string) => this.database.deduplicateRun(runId))
-    ipcMain.handle('history:delete', (_, runId: string) => {
-      this.database.deleteRun(runId)
+    ipcMain.handle('history:delete', (_, payload: { runId: string; userEmail?: string }) => {
+      this.database.deleteRun(payload.runId, payload.userEmail)
       return true
     })
     ipcMain.handle('history:restoreRun', (_, payload: RunBundlePayload) => {
-      this.database.restoreRun(payload.run)
-      this.database.restoreBusinesses(payload.results)
-      this.database.updateRunStatus(payload.run.id, payload.run.status, payload.results.length)
+      this.database.restoreRun(payload.run, payload.userEmail)
+      this.database.restoreBusinesses(payload.results, payload.userEmail)
+      if (this.database.getRunForUser(payload.run.id, payload.userEmail)) {
+        this.database.updateRunStatus(payload.run.id, payload.run.status, payload.results.length)
+      }
       return true
     })
     ipcMain.handle('history:clear', (_, userEmail?: string) => {
@@ -81,12 +88,14 @@ export class IpcController {
     })
     ipcMain.handle('history:restoreSnapshot', (_, payload: HistoryRestorePayload) => {
       for (const run of payload.runs) {
-        this.database.restoreRun(run)
+        this.database.restoreRun(run, payload.userEmail)
       }
-      this.database.restoreBusinesses(payload.results)
+      this.database.restoreBusinesses(payload.results, payload.userEmail)
       for (const run of payload.runs) {
-        const count = payload.results.filter((item) => item.runId === run.id).length
-        this.database.updateRunStatus(run.id, run.status, count)
+        if (this.database.getRunForUser(run.id, payload.userEmail)) {
+          const count = payload.results.filter((item) => item.runId === run.id).length
+          this.database.updateRunStatus(run.id, run.status, count)
+        }
       }
       return true
     })
@@ -101,14 +110,16 @@ export class IpcController {
   private getSnapshot(userEmail?: string): DashboardSnapshot {
     const runs = this.database.listRuns(userEmail)
     const latestRun = runs[0] ?? null
-    const selectedRunId = this.activeJob?.run.id ?? latestRun?.id
+    const scopedActiveRun =
+      this.activeJob && (!userEmail || this.activeJob.run.userEmail === userEmail) ? this.activeJob.run : null
+    const selectedRunId = scopedActiveRun?.id ?? latestRun?.id
 
     return {
       settings: this.settings.get(),
-      activeRun: this.activeJob?.run ?? null,
+      activeRun: scopedActiveRun,
       runs,
       results: selectedRunId ? this.database.listBusinesses({ runId: selectedRunId, userEmail }) : [],
-      progress: this.progress
+      progress: scopedActiveRun ? this.progress : null
     }
   }
 
@@ -119,7 +130,7 @@ export class IpcController {
 
   private async startScrape(form: ScrapeFormData): Promise<ScrapeRunRecord> {
     if (this.activeJob && ['running', 'paused'].includes(this.activeJob.run.status)) {
-      throw new Error('A scrape job is already active')
+      throw new Error('Masih ada proses scraping yang berjalan. Selesaikan atau hentikan dulu sebelum mulai yang baru.')
     }
 
     const keyword = form.keyword.trim()
@@ -127,11 +138,11 @@ export class IpcController {
     const maxResults = Math.max(1, Math.min(500, Math.floor(form.maxResults || 0)))
 
     if (!keyword) {
-      throw new Error('Keyword wajib diisi')
+      throw new Error('Kata kunci belum diisi. Masukkan kata kunci pencarian terlebih dahulu.')
     }
 
     if (!location) {
-      throw new Error('Location wajib diisi')
+      throw new Error('Lokasi target belum diisi. Pilih lokasi yang ingin discrape.')
     }
 
     const run = this.database.createRun(keyword, location, maxResults, form.userEmail || '')
@@ -144,7 +155,7 @@ export class IpcController {
       status: 'running',
       current: 0,
       total: maxResults,
-      message: 'Initializing scraper'
+      message: 'Menyiapkan proses scraping...'
     })
 
     const settings = this.settings.get()
@@ -182,12 +193,12 @@ export class IpcController {
           status,
           current: total,
           total: maxResults,
-          message: status === 'completed' ? 'Scrape completed' : 'Scrape stopped'
+          message: status === 'completed' ? 'Scraping selesai.' : 'Proses scraping dihentikan.'
         })
       })
       .catch((error: Error) => {
         const failedStatus =
-          control.stopped && error.message === 'Scrape stopped' ? 'stopped' : 'failed'
+          control.stopped && error.message === 'Proses scraping dihentikan.' ? 'stopped' : 'failed'
         const total = this.database.countBusinesses(run.id)
         this.database.updateRunStatus(run.id, failedStatus, total)
         this.emitProgress({
@@ -195,7 +206,7 @@ export class IpcController {
           status: failedStatus,
           current: total,
           total: maxResults,
-          message: failedStatus === 'stopped' ? 'Scrape stopped' : error.message
+          message: failedStatus === 'stopped' ? 'Proses scraping dihentikan.' : error.message
         })
       })
       .finally(() => {
@@ -221,7 +232,7 @@ export class IpcController {
       status: 'paused',
       current: this.activeJob.run.totalResults,
       total: this.activeJob.form.maxResults,
-      message: 'Scrape paused'
+      message: 'Scraping dijeda.'
     })
     return true
   }
@@ -242,7 +253,7 @@ export class IpcController {
       status: 'running',
       current: this.activeJob.run.totalResults,
       total: this.activeJob.form.maxResults,
-      message: 'Scrape resumed'
+      message: 'Scraping dilanjutkan.'
     })
     return true
   }
@@ -259,7 +270,11 @@ export class IpcController {
   }
 
   private exportResults(payload: ExportPayload): string {
-    const all = this.database.listBusinesses({ runId: payload.runId })
+    if (!this.database.getRunForUser(payload.runId, payload.userEmail)) {
+      throw new Error('Data sesi ini tidak tersedia untuk akun yang sedang aktif.')
+    }
+
+    const all = this.database.listBusinesses({ runId: payload.runId, userEmail: payload.userEmail })
     const records = payload.ids?.length ? all.filter((item) => payload.ids?.includes(item.id)) : all
     if (records.length === 0) {
       throw new Error('Tidak ada data untuk diekspor')
@@ -272,7 +287,11 @@ export class IpcController {
   }
 
   private async exportResultsSaveAs(payload: ExportPayload): Promise<string | null> {
-    const all = this.database.listBusinesses({ runId: payload.runId })
+    if (!this.database.getRunForUser(payload.runId, payload.userEmail)) {
+      throw new Error('Data sesi ini tidak tersedia untuk akun yang sedang aktif.')
+    }
+
+    const all = this.database.listBusinesses({ runId: payload.runId, userEmail: payload.userEmail })
     const records = payload.ids?.length ? all.filter((item) => payload.ids?.includes(item.id)) : all
     if (records.length === 0) {
       throw new Error('Tidak ada data untuk diekspor')
