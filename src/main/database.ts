@@ -276,13 +276,27 @@ export class DatabaseService {
   }
 
   deleteBusinesses(ids: string[]): void {
+    const affectedRunIds = new Set<string>()
+    const selectStmt = this.db.prepare(`SELECT run_id FROM businesses WHERE id = ?`)
     const stmt = this.db.prepare(`DELETE FROM businesses WHERE id = ?`)
     for (const id of ids) {
+      const row = selectStmt.get(id) as { run_id: string } | undefined
+      if (row?.run_id) {
+        affectedRunIds.add(row.run_id)
+      }
       stmt.run(id)
+    }
+
+    for (const runId of affectedRunIds) {
+      const run = this.getRun(runId)
+      if (run) {
+        this.updateRunStatus(runId, run.status, this.countBusinesses(runId))
+      }
     }
   }
 
   restoreBusinesses(records: BusinessRecord[]): void {
+    const affectedRunIds = new Set<string>()
     const stmt = this.db.prepare(
       `
         INSERT OR REPLACE INTO businesses
@@ -293,6 +307,7 @@ export class DatabaseService {
     )
 
     for (const record of records) {
+      affectedRunIds.add(record.runId)
       stmt.run(
         record.id,
         record.runId,
@@ -308,6 +323,13 @@ export class DatabaseService {
         record.longitude,
         record.scrapedAt
       )
+    }
+
+    for (const runId of affectedRunIds) {
+      const run = this.getRun(runId)
+      if (run) {
+        this.updateRunStatus(runId, run.status, this.countBusinesses(runId))
+      }
     }
   }
 

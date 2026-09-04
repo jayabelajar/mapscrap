@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import locationOptionsSource from './data/kota-kabupaten.json'
 import {
   LayoutDashboard,
   Play,
@@ -77,8 +78,15 @@ import {
   type ToastState
 } from './components/ui'
 
-type ViewKey = 'dashboard' | 'scrape' | 'results' | 'history' | 'settings'
+type ViewKey = 'dashboard' | 'scrape' | 'results' | 'history' | 'settings' | 'profile'
 type SortKey = 'name' | 'category' | 'rating' | 'reviewCount'
+type UserProfile = {
+  name: string
+  username: string
+  email: string
+  password?: string
+  avatarUrl?: string
+}
 
 const defaultSettings: SettingsData = {
   headless: true,
@@ -145,17 +153,25 @@ function matchesGlobalSearch(searchText: string, values: Array<string | number |
   return values.some((value) => String(value ?? '').toLowerCase().includes(text))
 }
 
+const locationOptions = Array.from(
+  new Set(
+    (locationOptionsSource as string[])
+      .map((item) => item.trim())
+      .filter(Boolean)
+  )
+).sort((left, right) => left.localeCompare(right, 'id'))
+
 function App(): React.JSX.Element {
   // Auth State & Persistence
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
     return Boolean(localStorage.getItem('mapscraper_user'))
   })
   const [authScreen, setAuthScreen] = useState<'login' | 'register'>('login')
-  const [user, setUser] = useState<{ name: string; username: string; email: string }>(() => {
+  const [user, setUser] = useState<UserProfile>(() => {
     const saved = localStorage.getItem('mapscraper_user')
     if (saved) {
       try {
-        return JSON.parse(saved)
+        return JSON.parse(saved) as UserProfile
       } catch {
         // fallback
       }
@@ -163,10 +179,28 @@ function App(): React.JSX.Element {
     return {
       name: 'Alex Scraper',
       username: '@alex.scraper',
-      email: 'alex@mapscraper.com'
+      email: 'alex@mapscraper.com',
+      password: ''
     }
   })
   const [authForm, setAuthForm] = useState({ email: '', password: '', name: '' })
+  const [profileForm, setProfileForm] = useState<UserProfile>(() => {
+    const saved = localStorage.getItem('mapscraper_user')
+    if (saved) {
+      try {
+        return JSON.parse(saved) as UserProfile
+      } catch {
+        // fallback
+      }
+    }
+    return {
+      name: 'Alex Scraper',
+      username: '@alex.scraper',
+      email: 'alex@mapscraper.com',
+      password: '',
+      avatarUrl: ''
+    }
+  })
 
   // Layout & Navigation State
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -195,6 +229,7 @@ function App(): React.JSX.Element {
   const [errorDialog, setErrorDialog] = useState<ErrorDialogState>(null)
   const [progressLog, setProgressLog] = useState<ProgressLogItem[]>([])
   const [timeTick, setTimeTick] = useState(() => Date.now())
+  const [searchOpen, setSearchOpen] = useState(false)
 
   const addToast = useCallback(
     (
@@ -214,6 +249,12 @@ function App(): React.JSX.Element {
     },
     []
   )
+
+  const persistUser = useCallback((nextUser: UserProfile) => {
+    localStorage.setItem('mapscraper_user', JSON.stringify(nextUser))
+    setUser(nextUser)
+    setProfileForm(nextUser)
+  }, [])
 
   const pushProgressLog = useCallback((status: RunStatus, message: string) => {
     if (!message) return
@@ -357,13 +398,28 @@ function App(): React.JSX.Element {
     [activeRun, runs, selectedRunId]
   )
 
-  const filteredRuns = useMemo(
-    () =>
-      runs.filter((run) =>
-        matchesGlobalSearch(search, [run.keyword, run.location, run.status, run.totalResults])
-      ),
-    [runs, search]
-  )
+  const searchSuggestions = useMemo(() => {
+    const text = search.trim().toLowerCase()
+    if (!text) {
+      return []
+    }
+
+    const suggestions = results
+      .filter((item) =>
+        matchesGlobalSearch(text, [item.name, item.category, item.address, item.phone, item.website])
+      )
+      .slice(0, 8)
+      .map((item) => ({
+        id: item.id,
+        label: item.name,
+        description: item.category || item.address || item.phone || '-',
+        runId: item.runId
+      }))
+
+    return suggestions
+  }, [results, search])
+
+  const filteredRuns = useMemo(() => runs, [runs])
 
   const filteredResults = useMemo(() => {
     const list = results.filter((item) => {
@@ -499,6 +555,30 @@ function App(): React.JSX.Element {
   const resetScrapeForm = (): void => {
     setForm({ keyword: 'Cafe', location: 'Surabaya, Jawa Timur', maxResults: 20 })
     addToast('Form direset', 'Parameter scrape kembali ke nilai awal', 'info')
+  }
+
+  const handleProfileAvatarChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      setProfileForm((current) => ({ ...current, avatarUrl: String(reader.result || '') }))
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleProfileSave = (): void => {
+    const sanitized: UserProfile = {
+      ...profileForm,
+      name: profileForm.name.trim() || user.name,
+      username: profileForm.username.trim() || user.username,
+      email: profileForm.email.trim().toLowerCase() || user.email,
+      password: profileForm.password ?? '',
+      avatarUrl: profileForm.avatarUrl ?? ''
+    }
+    persistUser(sanitized)
+    addToast('Profil disimpan', 'Perubahan profil berhasil diterapkan', 'success')
   }
 
   const handleExportSaveAs = async (
@@ -639,10 +719,11 @@ function App(): React.JSX.Element {
     const userData = {
       name: name.charAt(0).toUpperCase() + name.slice(1),
       username: `@${name.toLowerCase().replace(/\s+/g, '')}`,
-      email: authForm.email.toLowerCase()
+      email: authForm.email.toLowerCase(),
+      password: authForm.password,
+      avatarUrl: ''
     }
-    localStorage.setItem('mapscraper_user', JSON.stringify(userData))
-    setUser(userData)
+    persistUser(userData)
     setIsLoggedIn(true)
     addToast('Selamat Datang!', `Berhasil masuk sebagai ${userData.name}`, 'success')
   }
@@ -657,10 +738,11 @@ function App(): React.JSX.Element {
     const userData = {
       name: name.charAt(0).toUpperCase() + name.slice(1),
       username: `@${name.toLowerCase().replace(/\s+/g, '')}`,
-      email: authForm.email.toLowerCase()
+      email: authForm.email.toLowerCase(),
+      password: authForm.password,
+      avatarUrl: ''
     }
-    localStorage.setItem('mapscraper_user', JSON.stringify(userData))
-    setUser(userData)
+    persistUser(userData)
     setIsLoggedIn(true)
     addToast('Pendaftaran Sukses', `Akun ${userData.name} berhasil dibuat!`, 'success')
   }
@@ -671,6 +753,13 @@ function App(): React.JSX.Element {
     setAuthScreen('login')
     setRuns([])
     setResults([])
+    setProfileForm({
+      name: 'Alex Scraper',
+      username: '@alex.scraper',
+      email: 'alex@mapscraper.com',
+      password: '',
+      avatarUrl: ''
+    })
     addToast('Sampai Jumpa', 'Anda telah keluar akun', 'info')
   }
 
@@ -855,7 +944,7 @@ function App(): React.JSX.Element {
             {!sidebarCollapsed && (
               <div className="flex flex-col min-w-0">
                 <h1 className="text-sm font-bold tracking-tight text-white m-0 leading-tight">GmapScraper</h1>
-                <p className="text-[11px] text-slate-400 m-0">Scrape cepat, hasil tertata</p>
+                <p className="text-[11px] text-slate-400 m-0">Google Maps Scraper</p>
               </div>
             )}
           </div>
@@ -894,14 +983,23 @@ function App(): React.JSX.Element {
 
         {sidebarCollapsed ? (
           <div className="mt-auto flex flex-col items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/80 p-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 text-xs font-bold text-white">
-              {user.name
-                .split(' ')
-                .map((part) => part[0])
-                .join('')
-                .slice(0, 2)
-                .toUpperCase()}
-            </div>
+            <button
+              type="button"
+              onClick={() => setView('profile')}
+              className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border-0 bg-gradient-to-tr from-blue-600 to-indigo-500 p-0 text-xs font-bold text-white"
+              title="Profil"
+            >
+              {user.avatarUrl ? (
+                <img src={user.avatarUrl} alt={user.name} className="h-full w-full object-cover" />
+              ) : (
+                user.name
+                  .split(' ')
+                  .map((part) => part[0])
+                  .join('')
+                  .slice(0, 2)
+                  .toUpperCase()
+              )}
+            </button>
             <button
               onClick={handleLogout}
               title="Keluar"
@@ -914,6 +1012,8 @@ function App(): React.JSX.Element {
           <ProfileCard
             name={user.name}
             username={user.username}
+            avatarUrl={user.avatarUrl}
+            onOpenProfile={() => setView('profile')}
             onLogout={handleLogout}
           />
         )}
@@ -942,13 +1042,42 @@ function App(): React.JSX.Element {
                 {sidebarCollapsed ? <PanelLeftOpen className="w-5 h-5" /> : <PanelLeftClose className="w-5 h-5" />}
               </span>
             </button>
-            <div className="w-full max-w-xl">
+            <div className="relative w-full max-w-xl">
               <Input
                 icon={<Search className="w-3.5 h-3.5" />}
-                placeholder="Pencarian global: nama, kategori, lokasi, status"
+                placeholder="Cari data dan pilih hasilnya"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                onFocus={() => setSearchOpen(true)}
+                onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
               />
+              {searchOpen && searchSuggestions.length > 0 && (
+                <div className="absolute left-0 right-0 top-11 z-50 overflow-hidden rounded-xl border border-slate-800 bg-slate-950 shadow-2xl">
+                  {searchSuggestions.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className="flex w-full items-start justify-between gap-3 border-0 border-b border-slate-800/70 bg-transparent px-3 py-2.5 text-left last:border-b-0 hover:bg-slate-900"
+                      onMouseDown={() => {
+                        setSelectedRunId(item.runId)
+                        setView('results')
+                        setSearch(item.label)
+                        setSearchOpen(false)
+                        const picked = results.find((entry) => entry.id === item.id)
+                        if (picked) {
+                          setDetail(picked)
+                        }
+                      }}
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-semibold text-slate-100">{item.label}</div>
+                        <div className="truncate text-[11px] text-slate-400">{item.description}</div>
+                      </div>
+                      <span className="shrink-0 text-[10px] font-medium text-blue-400">Buka</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -1140,143 +1269,209 @@ function App(): React.JSX.Element {
 
               {/* SCRAPE FORM VIEW */}
               {view === 'scrape' && (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                  <Card className="lg:col-span-2">
-                    <CardHeader>
-                      <CardTitle>Form Scraping</CardTitle>
-                      <CardDescription>
-                        Masukkan kata kunci dan lokasi target untuk mengambil data tempat dari Google Maps.
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-semibold text-slate-300">Kata Kunci / Keyword</label>
-                        <Input
-                          icon={<Search className="w-3.5 h-3.5" />}
-                          placeholder="Contoh: Coffee Shop, Restoran, Bengkel, Apotek"
-                          value={form.keyword}
-                          onChange={(e) => setForm((c) => ({ ...c, keyword: e.target.value }))}
-                        />
-                      </div>
+                <div className="grid min-h-[calc(100vh-10rem)] grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.95fr)]">
+                  <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-5">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Form Scraping</CardTitle>
+                        <CardDescription>
+                          Masukkan parameter target lalu mulai pengambilan data Google Maps.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-slate-300">Kata Kunci</label>
+                            <Input
+                              icon={<Search className="w-3.5 h-3.5" />}
+                              placeholder="Contoh: Coffee Shop"
+                              value={form.keyword}
+                              onChange={(e) => setForm((c) => ({ ...c, keyword: e.target.value }))}
+                            />
+                          </div>
 
-                      {/* TEXT (Autocomplete) REMOVED FROM LABEL AS REQUESTED */}
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-semibold text-slate-300">Lokasi / Kota Target</label>
-                        <LocationAutocomplete
-                          icon={<MapPin className="w-3.5 h-3.5" />}
-                          value={form.location}
-                          onChange={(val) => setForm((c) => ({ ...c, location: val }))}
-                        />
-                      </div>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-slate-300">Lokasi Target</label>
+                            <LocationAutocomplete
+                              icon={<MapPin className="w-3.5 h-3.5" />}
+                              value={form.location}
+                              options={locationOptions}
+                              onChange={(val) => setForm((c) => ({ ...c, location: val }))}
+                            />
+                          </div>
 
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-semibold text-slate-300">Maksimal Hasil Data</label>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={500}
-                          value={form.maxResults}
-                          onChange={(e) =>
-                            setForm((c) => ({
-                              ...c,
-                              maxResults: Math.max(1, Math.min(500, Number(e.target.value) || 1))
-                            }))
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-slate-300">Maksimal Hasil</label>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={500}
+                              value={form.maxResults}
+                              onChange={(e) =>
+                                setForm((c) => ({
+                                  ...c,
+                                  maxResults: Math.max(1, Math.min(500, Number(e.target.value) || 1))
+                                }))
+                              }
+                            />
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-slate-300">Mode Browser</label>
+                            <Select
+                              value={settings.headless ? 'headless' : 'visible'}
+                              onChange={(e) =>
+                                setSettings((current) => ({
+                                  ...current,
+                                  headless: e.target.value === 'headless'
+                                }))
+                              }
+                            >
+                              <option value="headless">Headless</option>
+                              <option value="visible">Tampil Browser</option>
+                            </Select>
+                          </div>
+                        </div>
+                      </CardContent>
+                      <CardFooter className="flex gap-2 justify-start flex-wrap">
+                        <Button
+                          variant="default"
+                          disabled={isBusy || activeStatus === 'running'}
+                          onClick={() => void startScrape()}
+                        >
+                          <Play className="w-3.5 h-3.5" />
+                          Mulai Scrape
+                        </Button>
+
+                        <Button
+                          variant="outline"
+                          disabled={activeStatus !== 'running'}
+                          onClick={() =>
+                            void runAction(() => window.api.pauseScrape(), 'Scrape Didepause')
                           }
-                        />
-                      </div>
-                    </CardContent>
-                    <CardFooter className="flex gap-2 justify-start flex-wrap">
-                      <Button
-                        variant="default"
-                        disabled={isBusy || activeStatus === 'running'}
-                        onClick={() => void startScrape()}
-                      >
-                        <Play className="w-3.5 h-3.5" />
-                        Mulai Scrape
-                      </Button>
+                        >
+                          <Pause className="w-3.5 h-3.5" />
+                          Pause
+                        </Button>
 
-                      <Button
-                        variant="outline"
-                        disabled={activeStatus !== 'running'}
-                        onClick={() =>
-                          void runAction(() => window.api.pauseScrape(), 'Scrape Didepause')
-                        }
-                      >
-                        <Pause className="w-3.5 h-3.5" />
-                        Pause
-                      </Button>
+                        <Button
+                          variant="outline"
+                          disabled={activeStatus !== 'paused'}
+                          onClick={() =>
+                            void runAction(() => window.api.resumeScrape(), 'Scrape Dilanjutkan')
+                          }
+                        >
+                          <Play className="w-3.5 h-3.5" />
+                          Lanjutkan
+                        </Button>
 
-                      <Button
-                        variant="outline"
-                        disabled={activeStatus !== 'paused'}
-                        onClick={() =>
-                          void runAction(() => window.api.resumeScrape(), 'Scrape Dilanjutkan')
-                        }
-                      >
-                        <Play className="w-3.5 h-3.5" />
-                        Lanjutkan
-                      </Button>
+                        <Button
+                          variant="destructive"
+                          disabled={!['running', 'paused'].includes(activeStatus)}
+                          onClick={() =>
+                            void runAction(() => window.api.stopScrape(), 'Scrape Dihentikan')
+                          }
+                        >
+                          <Square className="w-3.5 h-3.5" />
+                          Stop
+                        </Button>
 
-                      <Button
-                        variant="destructive"
-                        disabled={!['running', 'paused'].includes(activeStatus)}
-                        onClick={() =>
-                          void runAction(() => window.api.stopScrape(), 'Scrape Dihentikan')
-                        }
-                      >
-                        <Square className="w-3.5 h-3.5" />
-                        Stop
-                      </Button>
+                        <Button variant="ghost" onClick={resetScrapeForm}>
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          Reset
+                        </Button>
+                      </CardFooter>
+                    </Card>
 
-                      <Button variant="ghost" onClick={resetScrapeForm}>
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        Reset
-                      </Button>
-                    </CardFooter>
-                  </Card>
+                    <Card className="min-h-0">
+                      <CardHeader>
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <CardTitle>Cuplikan Data</CardTitle>
+                            <CardDescription>Data terbaru dari sesi yang sedang dipilih</CardDescription>
+                          </div>
+                          <Button variant="ghost" size="sm" onClick={() => setView('results')}>
+                            Lihat Semua
+                          </Button>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="min-h-0">
+                        {dashboardPreviewResults.length === 0 ? (
+                          <p className="py-6 text-center text-xs text-slate-400 m-0">
+                            Belum ada data untuk ditampilkan.
+                          </p>
+                        ) : (
+                          <div className="max-h-[320px] overflow-auto">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Nama</TableHead>
+                                  <TableHead>Kategori</TableHead>
+                                  <TableHead>Telepon</TableHead>
+                                  <TableHead>Rating</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {dashboardPreviewResults.map((item) => (
+                                  <TableRow key={item.id}>
+                                    <TableCell className="font-semibold text-blue-400">{item.name}</TableCell>
+                                    <TableCell>{item.category || '-'}</TableCell>
+                                    <TableCell>{item.phone || '-'}</TableCell>
+                                    <TableCell>{item.rating ?? '-'}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </div>
 
-                  {/* LIVE MONITORING WITH INTERACTIVE STATUS */}
-                  <Card>
+                  <Card className="min-h-[calc(100vh-10rem)] xl:sticky xl:top-0">
                     <CardHeader>
                       <CardTitle>Live Monitoring</CardTitle>
-                      <CardDescription>Progres, kecepatan, dan status perubahan scrape</CardDescription>
+                      <CardDescription>Ringkasan scrape tanpa perlu scroll panjang</CardDescription>
                     </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-slate-400">Status</span>
-                        <Badge variant={getBadgeVariant(activeStatus)}>{activeStatus.toUpperCase()}</Badge>
+                    <CardContent className="flex h-full flex-col gap-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                          <div className="text-[11px] text-slate-400">Status</div>
+                          <div className="mt-2">
+                            <Badge variant={getBadgeVariant(activeStatus)}>{activeStatus.toUpperCase()}</Badge>
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                          <div className="text-[11px] text-slate-400">Terkumpul</div>
+                          <div className="mt-2 text-lg font-bold text-slate-100">
+                            {progress ? `${progress.current} / ${progress.total}` : '0 / 0'}
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                          <div className="text-[11px] text-slate-400">Estimasi total</div>
+                          <div className="mt-2 text-sm font-bold text-blue-400">{scrapeMetrics.totalEstimate}</div>
+                        </div>
+                        <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                          <div className="text-[11px] text-slate-400">Kecepatan</div>
+                          <div className="mt-2 text-sm font-semibold text-emerald-400">{scrapeMetrics.speedText}</div>
+                        </div>
                       </div>
 
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-slate-400">Terkumpul</span>
-                        <span className="font-bold text-slate-200">
-                          {progress ? `${progress.current} / ${progress.total}` : '0 / 0'}
-                        </span>
-                      </div>
-
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-slate-400">Estimasi total</span>
-                        <span className="font-bold text-blue-400">{scrapeMetrics.totalEstimate}</span>
-                      </div>
-
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-slate-400">Sisa waktu</span>
-                        <span className="font-semibold text-slate-200">{scrapeMetrics.remainingEstimate}</span>
-                      </div>
-
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-slate-400">Kecepatan</span>
-                        <span className="font-semibold text-emerald-400">{scrapeMetrics.speedText}</span>
-                      </div>
-
-                      <Progress value={progressPercent} />
-
-                      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-semibold text-slate-300">Progress interaktif</span>
+                      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                        <div className="mb-2 flex items-center justify-between">
+                          <span className="text-[11px] font-semibold text-slate-300">Progress scraping</span>
                           <span className="text-xl font-extrabold text-blue-400">{progressPercent}%</span>
                         </div>
-                        <div className="space-y-2">
+                        <Progress value={progressPercent} />
+                        <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
+                          <span>Sisa waktu</span>
+                          <span>{scrapeMetrics.remainingEstimate}</span>
+                        </div>
+                      </div>
+
+                      <div className="min-h-0 flex-1 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                        <div className="mb-3 text-[11px] font-semibold text-slate-300">Perubahan status</div>
+                        <div className="space-y-2 overflow-auto max-h-[calc(100vh-28rem)] pr-1">
                           {progressLog.length === 0 ? (
                             <p className="m-0 text-[11px] text-slate-400">
                               Status scrape akan tampil di sini setiap ada perubahan.
@@ -1300,7 +1495,7 @@ function App(): React.JSX.Element {
                         </div>
                       </div>
 
-                      <p className="text-xs text-slate-400 text-center m-0 leading-normal">
+                      <p className="m-0 text-center text-xs leading-normal text-slate-400">
                         {progress?.message ?? 'Jendela browser Playwright akan terbuka otomatis saat scrape berjalan.'}
                       </p>
                     </CardContent>
@@ -1335,15 +1530,6 @@ function App(): React.JSX.Element {
                               </option>
                             ))}
                           </Select>
-                        </div>
-
-                        <div className="w-40">
-                          <Input
-                            icon={<Search className="w-3.5 h-3.5" />}
-                            placeholder="Cari..."
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
-                          />
                         </div>
 
                         <div className="w-36">
@@ -1579,6 +1765,92 @@ function App(): React.JSX.Element {
                     </div>
                   </CardContent>
                 </Card>
+              )}
+
+              {view === 'profile' && (
+                <div className="grid grid-cols-1 gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Profil</CardTitle>
+                      <CardDescription>Kelola avatar dan identitas akun lokal Anda.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="flex flex-col items-center gap-3">
+                        <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 text-2xl font-bold text-white">
+                          {profileForm.avatarUrl ? (
+                            <img src={profileForm.avatarUrl} alt={profileForm.name} className="h-full w-full object-cover" />
+                          ) : (
+                            (profileForm.name || user.name)
+                              .split(' ')
+                              .map((part) => part[0])
+                              .join('')
+                              .slice(0, 2)
+                              .toUpperCase()
+                          )}
+                        </div>
+                        <label className="w-full">
+                          <span className="mb-1 block text-xs font-semibold text-slate-300">Avatar</span>
+                          <Input type="file" accept="image/*" onChange={handleProfileAvatarChange} />
+                        </label>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Data Profil</CardTitle>
+                      <CardDescription>Edit nama, username, email, dan password akun lokal.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-semibold text-slate-300">Nama</label>
+                          <Input
+                            value={profileForm.name}
+                            onChange={(e) => setProfileForm((current) => ({ ...current, name: e.target.value }))}
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-semibold text-slate-300">Username</label>
+                          <Input
+                            value={profileForm.username}
+                            onChange={(e) => setProfileForm((current) => ({ ...current, username: e.target.value }))}
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-semibold text-slate-300">Email</label>
+                          <Input
+                            type="email"
+                            value={profileForm.email}
+                            onChange={(e) => setProfileForm((current) => ({ ...current, email: e.target.value }))}
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-semibold text-slate-300">Password</label>
+                          <Input
+                            type="password"
+                            value={profileForm.password}
+                            onChange={(e) => setProfileForm((current) => ({ ...current, password: e.target.value }))}
+                          />
+                        </div>
+                      </div>
+                    </CardContent>
+                    <CardFooter className="justify-start">
+                      <Button variant="default" onClick={handleProfileSave}>
+                        Simpan Profil
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => setProfileForm(user)}
+                      >
+                        Reset Perubahan
+                      </Button>
+                    </CardFooter>
+                  </Card>
+                </div>
               )}
 
               {/* HISTORY VIEW */}

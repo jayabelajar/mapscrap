@@ -375,44 +375,21 @@ export function BarChart({ data }: { data: Array<{ label: string; value: number 
   )
 }
 
-// --- LOCATION AUTOCOMPLETE ---
-const INDONESIA_LOCATIONS = [
-  'Surabaya, Jawa Timur',
-  'Jakarta Selatan, DKI Jakarta',
-  'Jakarta Pusat, DKI Jakarta',
-  'Jakarta Barat, DKI Jakarta',
-  'Jakarta Utara, DKI Jakarta',
-  'Bandung, Jawa Barat',
-  'Medan, Sumatera Utara',
-  'Semarang, Jawa Tengah',
-  'Yogyakarta, D.I. Yogyakarta',
-  'Denpasar, Bali',
-  'Makassar, Sulawesi Selatan',
-  'Malang, Jawa Timur',
-  'Tangerang, Banten',
-  'Bekasi, Jawa Barat',
-  'Depok, Jawa Barat',
-  'Palembang, Sumatera Selatan',
-  'Balikpapan, Kalimantan Timur',
-  'Batam, Kepulauan Riau',
-  'Surakarta, Jawa Tengah',
-  'Bogor, Jawa Barat'
-]
-
 export function LocationAutocomplete({
   value,
   onChange,
-  icon
+  icon,
+  options = []
 }: {
   value: string
   onChange: (val: string) => void
   icon?: React.ReactNode
+  options?: string[]
 }): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
 
-  const filtered = INDONESIA_LOCATIONS.filter((loc) =>
-    loc.toLowerCase().includes((value || '').toLowerCase())
-  )
+  const query = (value || '').toLowerCase()
+  const filtered = options.filter((loc) => loc.toLowerCase().includes(query)).slice(0, 12)
 
   return (
     <div className="relative w-full">
@@ -452,12 +429,14 @@ export function ProfileCard({
   name,
   username,
   avatarUrl,
-  onLogout
+  onLogout,
+  onOpenProfile
 }: {
   name: string
   username: string
   avatarUrl?: string
   onLogout: () => void
+  onOpenProfile?: () => void
 }): React.JSX.Element {
   const initials = name
     .split(' ')
@@ -468,7 +447,11 @@ export function ProfileCard({
 
   return (
     <div className="p-2.5 rounded-xl border border-slate-800 bg-slate-950/80 flex items-center justify-between gap-2.5 mt-auto">
-      <div className="flex items-center gap-2.5 min-w-0">
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 items-center gap-2.5 border-0 bg-transparent p-0 text-left cursor-pointer"
+        onClick={onOpenProfile}
+      >
         <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 text-white text-xs font-bold flex items-center justify-center shrink-0 overflow-hidden shadow-md">
           {avatarUrl ? <img src={avatarUrl} alt={name} className="w-full h-full object-cover" /> : initials}
         </div>
@@ -476,7 +459,7 @@ export function ProfileCard({
           <span className="text-xs font-semibold text-slate-100 truncate">{name}</span>
           <span className="text-[11px] text-slate-400 truncate">{username}</span>
         </div>
-      </div>
+      </button>
       <button
         onClick={onLogout}
         title="Keluar / Logout"
