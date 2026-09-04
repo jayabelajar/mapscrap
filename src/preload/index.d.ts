@@ -3,7 +3,9 @@ import type {
   BusinessRecord,
   DashboardSnapshot,
   ExportPayload,
+  HistoryRestorePayload,
   ResultsQuery,
+  RunBundlePayload,
   ScrapeFormData,
   ScrapeProgressPayload,
   SettingsData
@@ -23,9 +25,12 @@ interface AppApi {
   selectDirectory: () => Promise<string | null>
   listResults: (query: ResultsQuery) => Promise<BusinessRecord[]>
   deleteResults: (ids: string[]) => Promise<boolean>
+  restoreResults: (records: BusinessRecord[]) => Promise<boolean>
   deduplicateRun: (runId: string) => Promise<number>
   deleteRun: (runId: string) => Promise<boolean>
+  restoreRun: (payload: RunBundlePayload) => Promise<boolean>
   clearHistory: (userEmail?: string) => Promise<boolean>
+  restoreHistorySnapshot: (payload: HistoryRestorePayload) => Promise<boolean>
   exportResults: (payload: ExportPayload) => Promise<string>
   exportResultsSaveAs: (payload: ExportPayload) => Promise<string | null>
   onProgress: (listener: Listener<ScrapeProgressPayload>) => () => void

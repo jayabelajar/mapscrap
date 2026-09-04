@@ -3,7 +3,9 @@ import { electronAPI } from '@electron-toolkit/preload'
 import type {
   BusinessRecord,
   ExportPayload,
+  HistoryRestorePayload,
   ResultsQuery,
+  RunBundlePayload,
   ScrapeFormData,
   ScrapeProgressPayload,
   SettingsData
@@ -22,9 +24,13 @@ const api = {
   selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
   listResults: (query: ResultsQuery) => ipcRenderer.invoke('results:list', query),
   deleteResults: (ids: string[]) => ipcRenderer.invoke('results:delete', ids),
+  restoreResults: (records: BusinessRecord[]) => ipcRenderer.invoke('results:restore', records),
   deduplicateRun: (runId: string) => ipcRenderer.invoke('results:deduplicate', runId),
   deleteRun: (runId: string) => ipcRenderer.invoke('history:delete', runId),
+  restoreRun: (payload: RunBundlePayload) => ipcRenderer.invoke('history:restoreRun', payload),
   clearHistory: (userEmail?: string) => ipcRenderer.invoke('history:clear', userEmail),
+  restoreHistorySnapshot: (payload: HistoryRestorePayload) =>
+    ipcRenderer.invoke('history:restoreSnapshot', payload),
   exportResults: (payload: ExportPayload) => ipcRenderer.invoke('export:run', payload),
   exportResultsSaveAs: (payload: ExportPayload) => ipcRenderer.invoke('export:saveAs', payload),
   onProgress: (listener: (payload: ScrapeProgressPayload) => void) => {

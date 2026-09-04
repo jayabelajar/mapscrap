@@ -8,7 +8,9 @@ import { SettingsStore } from './settings'
 import type {
   DashboardSnapshot,
   ExportPayload,
+  HistoryRestorePayload,
   ResultsQuery,
+  RunBundlePayload,
   ScrapeFormData,
   ScrapeProgressPayload,
   ScrapeRunRecord,
@@ -58,13 +60,34 @@ export class IpcController {
       this.database.deleteBusinesses(ids)
       return true
     })
+    ipcMain.handle('results:restore', (_, records) => {
+      this.database.restoreBusinesses(records)
+      return true
+    })
     ipcMain.handle('results:deduplicate', (_, runId: string) => this.database.deduplicateRun(runId))
     ipcMain.handle('history:delete', (_, runId: string) => {
       this.database.deleteRun(runId)
       return true
     })
+    ipcMain.handle('history:restoreRun', (_, payload: RunBundlePayload) => {
+      this.database.restoreRun(payload.run)
+      this.database.restoreBusinesses(payload.results)
+      this.database.updateRunStatus(payload.run.id, payload.run.status, payload.results.length)
+      return true
+    })
     ipcMain.handle('history:clear', (_, userEmail?: string) => {
       this.database.clearHistory(userEmail)
+      return true
+    })
+    ipcMain.handle('history:restoreSnapshot', (_, payload: HistoryRestorePayload) => {
+      for (const run of payload.runs) {
+        this.database.restoreRun(run)
+      }
+      this.database.restoreBusinesses(payload.results)
+      for (const run of payload.runs) {
+        const count = payload.results.filter((item) => item.runId === run.id).length
+        this.database.updateRunStatus(run.id, run.status, count)
+      }
       return true
     })
     ipcMain.handle('scrape:start', (_, form: ScrapeFormData) => this.startScrape(form))
@@ -278,4 +301,3 @@ export class IpcController {
     return this.exporter.exportBusinesses(payload.format, records, fileLabel, tempSettings)
   }
 }
-

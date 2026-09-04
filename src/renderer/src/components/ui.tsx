@@ -253,6 +253,8 @@ export interface ToastState {
   title: string
   description?: string
   type?: 'success' | 'error' | 'info' | 'warning'
+  actionLabel?: string
+  onAction?: () => void
 }
 
 export function ToastContainer({ toasts, onDismiss }: { toasts: ToastState[]; onDismiss: (id: string) => void }): React.JSX.Element {
@@ -263,6 +265,15 @@ export function ToastContainer({ toasts, onDismiss }: { toasts: ToastState[]; on
           <div className="flex flex-col gap-0.5">
             <h4 className="text-xs font-semibold text-slate-100 m-0">{toast.title}</h4>
             {toast.description && <p className="text-[11px] text-slate-400 m-0 leading-normal">{toast.description}</p>}
+            {toast.actionLabel && toast.onAction && (
+              <button
+                type="button"
+                className="mt-1 self-start rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] font-semibold text-slate-100 hover:bg-slate-700"
+                onClick={toast.onAction}
+              >
+                {toast.actionLabel}
+              </button>
+            )}
           </div>
           <button className="bg-transparent border-0 text-slate-400 hover:text-white cursor-pointer p-0 text-sm" onClick={() => onDismiss(toast.id)}>
             &times;

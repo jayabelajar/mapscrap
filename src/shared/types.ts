@@ -66,9 +66,18 @@ export interface ExportPayload {
   format: 'csv' | 'xlsx'
 }
 
+export interface RunBundlePayload {
+  run: ScrapeRunRecord
+  results: BusinessRecord[]
+}
+
+export interface HistoryRestorePayload {
+  runs: ScrapeRunRecord[]
+  results: BusinessRecord[]
+}
+
 export interface ResultsQuery {
   runId?: string
   search?: string
   userEmail?: string
 }
-

@@ -160,7 +160,7 @@ async function collectPlaceUrls(
     const feed = page.locator(activeListSelector).first()
     const previousHeight = await feed.evaluate((node) => node.scrollHeight).catch(() => 0)
     await feed.evaluate((node) => node.scrollBy(0, node.scrollHeight)).catch(() => undefined)
-    await page.waitForTimeout(1200)
+    await page.waitForTimeout(500)
     const nextHeight = await feed.evaluate((node) => node.scrollHeight).catch(() => 0)
     if (nextHeight === previousHeight && urls.size >= maxResults) {
       break
@@ -356,4 +356,3 @@ export class GoogleMapsScraper {
     this.browser = null
   }
 }
-

@@ -5,11 +5,11 @@ import type { SettingsData } from '../shared/types'
 
 const defaultSettings = (): SettingsData => ({
   headless: true,
-  delayMs: 1200,
+  delayMs: 500,
   timeoutMs: 30000,
   autoDeduplicate: true,
   autoSave: true,
-  exportDirectory: join(app.getPath('documents'), 'MapScraper Exports')
+  exportDirectory: join(app.getPath('documents'), 'GmapScraper Exports')
 })
 
 export class SettingsStore {

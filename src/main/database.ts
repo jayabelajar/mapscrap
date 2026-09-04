@@ -2,7 +2,12 @@ import { app } from 'electron'
 import { mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { DatabaseSync } from 'node:sqlite'
-import type { BusinessRecord, ResultsQuery, RunStatus, ScrapeRunRecord } from '../shared/types'
+import type {
+  BusinessRecord,
+  ResultsQuery,
+  RunStatus,
+  ScrapeRunRecord
+} from '../shared/types'
 import { createId, nowIso } from './utils'
 
 type RunRow = {
@@ -277,9 +282,60 @@ export class DatabaseService {
     }
   }
 
+  restoreBusinesses(records: BusinessRecord[]): void {
+    const stmt = this.db.prepare(
+      `
+        INSERT OR REPLACE INTO businesses
+          (id, run_id, name, category, address, phone, website, rating, review_count, maps_url, latitude, longitude, scraped_at)
+        VALUES
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `
+    )
+
+    for (const record of records) {
+      stmt.run(
+        record.id,
+        record.runId,
+        record.name,
+        record.category,
+        record.address,
+        record.phone,
+        record.website,
+        record.rating,
+        record.reviewCount,
+        record.mapsUrl,
+        record.latitude,
+        record.longitude,
+        record.scrapedAt
+      )
+    }
+  }
+
   deleteRun(runId: string): void {
     this.db.prepare(`DELETE FROM businesses WHERE run_id = ?`).run(runId)
     this.db.prepare(`DELETE FROM runs WHERE id = ?`).run(runId)
+  }
+
+  restoreRun(run: ScrapeRunRecord): void {
+    this.db
+      .prepare(
+        `
+          INSERT OR REPLACE INTO runs
+            (id, user_email, keyword, location, status, total_results, max_results, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `
+      )
+      .run(
+        run.id,
+        run.userEmail ?? '',
+        run.keyword,
+        run.location,
+        run.status,
+        run.totalResults,
+        run.maxResults,
+        run.createdAt,
+        run.updatedAt
+      )
   }
 
   deduplicateRun(runId: string): number {
